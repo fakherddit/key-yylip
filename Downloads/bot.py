@@ -4,24 +4,34 @@ import telegram
 import os
 from datetime import datetime
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import os
+import sqlite3
 
-TOKEN = "8216359066:AAG5awNOda7BbYaT_fclc-tZBvNTWuqht98"  # PUT YOUR BOT TOKEN HERE!
-ADMIN_CODE = "123123NNK"
+# Read from environment variables
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ADMIN_CODE = os.getenv("ADMIN_CODE", "123123NNK")
 SIGNATURE = "\n\n© @FAKHERDDIN5"
 SELLER_CHANNEL_URL = "https://t.me/stonexff"
+DB_PATH = os.getenv("DB_PATH", "bot.db")
 
 # Database connection
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://pharm_db_qwum_user:ORxhLJpvjSumWLWQGDaqjQKEWUDeVFls@dpg-d5jp8vili9vc73bk3vcg-a.oregon-postgres.render.com/pharm_db_qwum")
-
 def get_db_connection():
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
         return conn
     except Exception as e:
         print(f"Database connection error: {e}")
+        # If database is corrupted, remove it and create a new one
+        if "file is not a database" in str(e):
+            print(f"🔧 Removing corrupted database: {DB_PATH}")
+            try:
+                os.remove(DB_PATH)
+                print("✅ Creating new database...")
+                conn = sqlite3.connect(DB_PATH)
+                conn.row_factory = sqlite3.Row
+                return conn
+            except Exception as remove_error:
+                print(f"Failed to remove corrupted database: {remove_error}")
         return None
 
 def init_db():
@@ -33,77 +43,77 @@ def init_db():
         # Users table
         cur.execute('''
             CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
+                user_id INTEGER PRIMARY KEY,
                 username TEXT,
-                balance FLOAT DEFAULT 0,
-                created_at TIMESTAMP DEFAULT NOW()
+                balance REAL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         # Sellers table
         cur.execute('''
             CREATE TABLE IF NOT EXISTS sellers (
-                seller_id BIGINT PRIMARY KEY,
+                seller_id INTEGER PRIMARY KEY,
                 name TEXT,
-                balance FLOAT DEFAULT 0,
-                sales_count INT DEFAULT 0,
-                created_at TIMESTAMP DEFAULT NOW()
+                balance REAL DEFAULT 0,
+                sales_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         # Keys table
         cur.execute('''
             CREATE TABLE IF NOT EXISTS keys (
-                key_id SERIAL PRIMARY KEY,
+                key_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 product TEXT,
-                duration INT,
+                duration INTEGER,
                 key_value TEXT UNIQUE,
-                is_used BOOLEAN DEFAULT FALSE,
-                sold_to BIGINT,
+                is_used BOOLEAN DEFAULT 0,
+                sold_to INTEGER,
                 sold_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT NOW()
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         # Prices table
         cur.execute('''
             CREATE TABLE IF NOT EXISTS prices (
-                price_id SERIAL PRIMARY KEY,
+                price_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 product TEXT,
-                duration INT,
-                seller_id BIGINT,
-                price FLOAT,
-                created_at TIMESTAMP DEFAULT NOW()
+                duration INTEGER,
+                seller_id INTEGER,
+                price REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         # Sales log table
         cur.execute('''
             CREATE TABLE IF NOT EXISTS sales_log (
-                sale_id SERIAL PRIMARY KEY,
-                buyer_id BIGINT,
+                sale_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                buyer_id INTEGER,
                 product TEXT,
-                duration INT,
-                qty INT,
-                unit_price FLOAT,
-                total_price FLOAT,
-                seller_id BIGINT,
-                buyer_balance FLOAT,
-                created_at TIMESTAMP DEFAULT NOW()
+                duration INTEGER,
+                qty INTEGER,
+                unit_price REAL,
+                total_price REAL,
+                seller_id INTEGER,
+                buyer_balance REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         # Stats table
         cur.execute('''
             CREATE TABLE IF NOT EXISTS stats (
-                stat_id SERIAL PRIMARY KEY,
-                start_clicks INT DEFAULT 0,
-                updated_at TIMESTAMP DEFAULT NOW()
+                stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                start_clicks INTEGER DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
         # Ensure stats row exists
-        cur.execute('INSERT INTO stats (start_clicks) SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM stats)')
+        cur.execute('INSERT OR IGNORE INTO stats (stat_id, start_clicks) VALUES (1, 0)')
         
         conn.commit()
         print("Database initialized successfully!")
@@ -128,7 +138,7 @@ def load_data():
             "used_keys": []
         }
     
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur = conn.cursor()
     data = {
         "balances": {},
         "sellers": {},
@@ -181,7 +191,7 @@ def load_data():
             })
         
         # Load stats
-        cur.execute('SELECT start_clicks FROM stats LIMIT 1')
+        cur.execute('SELECT start_clicks FROM stats WHERE stat_id = 1')
         row = cur.fetchone()
         if row:
             data["start_clicks"] = row['start_clicks']
@@ -204,23 +214,19 @@ def save_data(data):
         # Update or insert users and balances
         for uid, balance in data.get("balances", {}).items():
             cur.execute('''
-                INSERT INTO users (user_id, balance)
-                VALUES (%s, %s)
-                ON CONFLICT (user_id) DO UPDATE SET balance = %s
-            ''', (int(uid), balance, balance))
+                INSERT OR REPLACE INTO users (user_id, balance)
+                VALUES (?, ?)
+            ''', (int(uid), balance))
         
         # Update sellers
         for sid, info in data.get("sellers", {}).items():
             cur.execute('''
-                INSERT INTO sellers (seller_id, name, balance, sales_count)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (seller_id) DO UPDATE SET 
-                    name = %s, balance = %s, sales_count = %s
-            ''', (int(sid), info.get("name"), info.get("balance", 0), info.get("sales_count", 0),
-                  info.get("name"), info.get("balance", 0), info.get("sales_count", 0)))
+                INSERT OR REPLACE INTO sellers (seller_id, name, balance, sales_count)
+                VALUES (?, ?, ?, ?)
+            ''', (int(sid), info.get("name"), info.get("balance", 0), info.get("sales_count", 0)))
         
         # Update start_clicks
-        cur.execute('UPDATE stats SET start_clicks = %s WHERE stat_id = 1', 
+        cur.execute('UPDATE stats SET start_clicks = ? WHERE stat_id = 1', 
                    (data.get("start_clicks", 0),))
         
         conn.commit()
@@ -244,7 +250,7 @@ def load_prices():
             "sellers": {}
         }
     
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur = conn.cursor()
     prices = {"global": {}, "sellers": {}}
     
     try:
@@ -299,7 +305,7 @@ def save_prices(prices):
             for duration, price in durations.items():
                 cur.execute('''
                     INSERT INTO prices (product, duration, price)
-                    VALUES (%s, %s, %s)
+                    VALUES (?, ?, ?)
                 ''', (product, int(duration), price))
         
         # Save seller prices
@@ -308,7 +314,7 @@ def save_prices(prices):
                 for duration, price in durations.items():
                     cur.execute('''
                         INSERT INTO prices (product, duration, seller_id, price)
-                        VALUES (%s, %s, %s, %s)
+                        VALUES (?, ?, ?, ?)
                     ''', (product, int(duration), int(seller_id), price))
         
         conn.commit()
@@ -332,9 +338,8 @@ def add_keys_to_db(product, duration, keys):
     try:
         for key in keys:
             cur.execute('''
-                INSERT INTO keys (product, duration, key_value)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (key_value) DO NOTHING
+                INSERT OR IGNORE INTO keys (product, duration, key_value)
+                VALUES (?, ?, ?)
             ''', (product, int(duration), key))
         conn.commit()
     except Exception as e:
@@ -349,13 +354,13 @@ def get_available_keys(product, duration, count):
     if not conn:
         return []
     
-    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur = conn.cursor()
     keys = []
     try:
         cur.execute('''
             SELECT key_id, key_value FROM keys 
-            WHERE product = %s AND duration = %s AND is_used = FALSE 
-            LIMIT %s
+            WHERE product = ? AND duration = ? AND is_used = 0 
+            LIMIT ?
         ''', (product, int(duration), count))
         keys = [row['key_value'] for row in cur.fetchall()]
     except Exception as e:
@@ -375,8 +380,8 @@ def mark_keys_used(keys, buyer_id):
     try:
         for key in keys:
             cur.execute('''
-                UPDATE keys SET is_used = TRUE, sold_to = %s, sold_at = NOW()
-                WHERE key_value = %s
+                UPDATE keys SET is_used = 1, sold_to = ?, sold_at = CURRENT_TIMESTAMP
+                WHERE key_value = ?
             ''', (int(buyer_id), key))
         conn.commit()
     except Exception as e:
@@ -395,7 +400,7 @@ def log_sale(buyer_id, product, duration, qty, unit_price, total_price, seller_i
     try:
         cur.execute('''
             INSERT INTO sales_log (buyer_id, product, duration, qty, unit_price, total_price, seller_id, buyer_balance)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (int(buyer_id), product, int(duration), qty, unit_price, total_price, 
               int(seller_id) if seller_id else None, buyer_balance))
         conn.commit()
@@ -1970,10 +1975,17 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== MAIN ==========
 def main():
- if not TOKEN or TOKEN == "YOUR_BOT_TOKEN_HERE":
-     print("Error: Set your TELEGRAM_BOT_TOKEN in the code!")
+ if not TOKEN:
+     print("❌ Error: TELEGRAM_BOT_TOKEN not set!")
+     print("📝 Set it as an environment variable on Render:")
+     print("   1. Go to Dashboard → Your Service")
+     print("   2. Click Environment")
+     print("   3. Add: TELEGRAM_BOT_TOKEN = 8216359066:AAG5awNOda7BbYaT_fclc-tZBvNTWuqht98")
+     print("   4. Click Save")
+     print("   5. Go back and click 'Redeploy' or restart the service")
      return
  
+ print("✅ Token found!")
  # Initialize database
  init_db()
  
