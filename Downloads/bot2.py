@@ -463,6 +463,44 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("قائمة الأدمن:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(admin_keyboard))
         return
     
+    # Add Balance
+    if data == "admin_add_balance":
+        context.user_data["admin_action"] = "add_balance"
+        await query.edit_message_text("أدخل معرف المستخدم والمبلغ (مثال: 123456789 10):" + SIGNATURE)
+        return
+    
+    # Add Keys
+    if data == "admin_add_keys":
+        PRICES = load_prices()
+        products = list(PRICES.get("global", {}).keys())
+        keyboard = []
+        for prod in products:
+            keyboard.append([InlineKeyboardButton(prod, callback_data=f"admin_add_keys_product:{prod}")])
+        keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
+        await query.edit_message_text("اختر المنتج:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    if data and data.startswith("admin_add_keys_product:"):
+        product = data.split(":")[1]
+        PRICES = load_prices()
+        durations = list(PRICES.get("global", {}).get(product, {}).keys())
+        keyboard = []
+        for dur in durations:
+            keyboard.append([InlineKeyboardButton(f"{dur} يوم", callback_data=f"admin_add_keys_duration:{product}:{dur}")])
+        keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_add_keys")])
+        await query.edit_message_text(f"اختر المدة للمنتج {product}:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    if data and data.startswith("admin_add_keys_duration:"):
+        parts = data.split(":")
+        product = parts[1]
+        duration = parts[2]
+        context.user_data["admin_action"] = "add_keys"
+        context.user_data["add_keys_product"] = product
+        context.user_data["add_keys_duration"] = duration
+        await query.edit_message_text(f"أرسل المفاتيح (كل مفتاح في سطر) للمنتج {product} المدة {duration}:" + SIGNATURE)
+        return
+    
     # Change seller prices - Step 1: Select Seller
     if data == "admin_change_seller_prices":
         sellers = DATA.get("sellers", {})
@@ -559,11 +597,69 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "back_to_start":
         await start(update, context)
         return
+    
+    # Change language
+    if data and data.startswith("set_lang:"):
+        lang = data.split(":")[1]
+        context.user_data["lang"] = lang
+        await query.edit_message_text("✅ تم تغيير اللغة!" if lang == "ar" else "✅ Language changed!" + SIGNATURE)
+        await start(update, context)
+        return
+    
+    # Show Activity/Statistics
+    if data == "show_activity":
+        DATA = load_data()
+        sellers = DATA.get("sellers", {})
+        sales = DATA.get("sales_log", [])
+        users = DATA.get("users", [])
+        
+        msg = f"📊 الإحصائيات:\n\n"
+        msg += f"👥 عدد المستخدمين: {len(users)}\n"
+        msg += f"👨‍💼 عدد البائعين: {len(sellers)}\n"
+        msg += f"📦 عدد المبيعات: {len(sales)}\n\n"
+        
+        if sellers:
+            msg += "📋 البائعون:\n"
+            for sid, info in sellers.items():
+                msg += f"• {info.get('name')} - رصيد: ${info.get('balance')} - مبيعات: {info.get('sales_count')}\n"
+        
+        await query.edit_message_text(msg + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+        return
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip() if update.message.text else ""
+    lang = context.user_data.get("lang", "ar")
     
     action = context.user_data.get("admin_action")
+    
+    # Handle main menu buttons
+    if text == "🛍️ شراء مفاتيح" or text == "🛍️ BUY KEYS":
+        await update.message.reply_text("اختر المنتج:" if lang == "ar" else "Select a product:")
+        return
+    
+    if text == "💰 رصيدي" or text == "💰 MY BALANCE":
+        uid = str(update.message.from_user.id)
+        DATA = load_data()
+        balance = DATA.get("balances", {}).get(uid, 0)
+        await update.message.reply_text(f"رصيدك: ${balance}" if lang == "ar" else f"Your balance: ${balance}")
+        return
+    
+    if text == "🔐 لوحة الادمن" or text == "🔐 ADMIN PANEL":
+        context.user_data["awaiting_admin_code"] = True
+        await update.message.reply_text("أدخل كود الإدمن:" if lang == "ar" else "Enter admin code:")
+        return
+    
+    if text == "🌐 تغيير اللغة" or text == "🌐 Change Language":
+        keyboard = [
+            [InlineKeyboardButton("العربية", callback_data="set_lang:ar")],
+            [InlineKeyboardButton("English", callback_data="set_lang:en")]
+        ]
+        await update.message.reply_text("اختر اللغة / Select language:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    if text == "⬅️ Back":
+        await start(update, context)
+        return
     
     # Handle change seller price
     if action == "change_seller_price":
@@ -601,6 +697,20 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         add_keys_to_db(product, duration, keys)
         await update.message.reply_text(f"✅ تم إضافة {len(keys)} مفتاح" + SIGNATURE)
         context.user_data.pop("admin_action", None)
+        return
+    
+    # Handle add balance
+    if action == "add_balance":
+        try:
+            parts = text.split()
+            uid, amount = parts[0], float(parts[1])
+            DATA = load_data()
+            DATA["balances"][uid] = DATA.get("balances", {}).get(uid, 0) + amount
+            save_data(DATA)
+            await update.message.reply_text(f"✅ تم إضافة ${amount} للمستخدم {uid}\nالرصيد الجديد: ${DATA['balances'][uid]}" + SIGNATURE)
+            context.user_data.pop("admin_action", None)
+        except:
+            await update.message.reply_text("❌ صيغة خاطئة! أدخل: user_id amount" + SIGNATURE)
         return
     
     # Handle admin code
