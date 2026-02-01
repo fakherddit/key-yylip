@@ -1,8 +1,1 @@
-{
-    "settings": {
-        "server_enabled": "1",
-        "key_validation_enabled": "1",
-        "key_creation_enabled": "1"
-    },
-    "licenses": []
-}
+{"keys": [], "settings": {"server_enabled": true, "key_validation_enabled": true, "key_creation_enabled": true}}
