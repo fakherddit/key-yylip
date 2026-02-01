@@ -6,15 +6,15 @@ from datetime import datetime
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 import psycopg2
 from psycopg2.extras import RealDictCursor
-import os
+import sys
 
-TOKEN = "YOUR_BOT_TOKEN_2"  # ضع التوكن الثاني هنا
-ADMIN_CODE = "123123NNK"
+# Read from environment variables
+TOKEN = os.getenv("TOKEN_BOT_2", "8216359066:AAG5awNOda7BbYaT_fclc-tZBvNTWuqht98")
+ADMIN_CODE = os.getenv("ADMIN_CODE", "123123NNK")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://pharm_db_qwum_user:ORxhLJpvjSumWLWQGDaqjQKEWUDeVFls@dpg-d5jp8vili9vc73bk3vcg-a.oregon-postgres.render.com/pharm_db_qwum")
+
 SIGNATURE = "\n\n© @FAKHERDDIN5"
 SELLER_CHANNEL_URL = "https://t.me/stonexff"
-
-# Database connection
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://pharm_db_qwum_user:ORxhLJpvjSumWLWQGDaqjQKEWUDeVFls@dpg-d5jp8vili9vc73bk3vcg-a.oregon-postgres.render.com/pharm_db_qwum")
 
 def get_db_connection():
     try:
@@ -225,6 +225,7 @@ def load_prices():
 def save_prices(prices):
     conn = get_db_connection()
     if not conn:
+        print("❌ No database connection available")
         return
     
     cur = conn.cursor()
@@ -238,7 +239,7 @@ def save_prices(prices):
                 cur.execute('''
                     INSERT INTO prices (product, duration, price)
                     VALUES (%s, %s, %s)
-                ''', (product, int(duration), price))
+                ''', (product, int(duration), float(price)))
         
         # Save seller prices
         for seller_id, products in prices.get("sellers", {}).items():
@@ -247,11 +248,12 @@ def save_prices(prices):
                     cur.execute('''
                         INSERT INTO prices (product, duration, seller_id, price)
                         VALUES (%s, %s, %s, %s)
-                    ''', (product, int(duration), int(seller_id), price))
+                    ''', (product, int(duration), int(seller_id), float(price)))
         
         conn.commit()
+        print(f"✅ Prices saved: {len(prices.get('sellers', {}))} sellers")
     except Exception as e:
-        print(f"Error saving prices: {e}")
+        print(f"❌ Error saving prices: {e}")
         conn.rollback()
     finally:
         cur.close()
@@ -456,6 +458,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("💳 Add Balance", callback_data="admin_add_balance")],
             [InlineKeyboardButton("🔑 Add Keys", callback_data="admin_add_keys")],
             [InlineKeyboardButton("⚙️ Change Seller Price", callback_data="admin_change_seller_prices")],
+            [InlineKeyboardButton("📊 Quick Price ±$1", callback_data="admin_quick_price")],
             [InlineKeyboardButton("🎨 Seller Design", callback_data="admin_seller_design")],
             [InlineKeyboardButton("📊 Statistics", callback_data="show_activity")],
             [InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]
@@ -491,6 +494,78 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"اختر المدة للمنتج {product}:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
         return
     
+    # Buy product - select duration
+    if data and data.startswith("buy_product:"):
+        product = data.split(":")[1]
+        PRICES = load_prices()
+        durations = list(PRICES.get("global", {}).get(product, {}).keys())
+        keyboard = []
+        for dur in durations:
+            price = get_price(PRICES, product, dur)
+            keyboard.append([InlineKeyboardButton(f"{dur} يوم - ${price}", callback_data=f"buy_duration:{product}:{dur}")])
+        keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")])
+        await query.edit_message_text(f"🛍️ اختر مدة الاشتراك - {product}:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Buy duration - select quantity
+    if data and data.startswith("buy_duration:"):
+        parts = data.split(":")
+        product = parts[1]
+        duration = parts[2]
+        PRICES = load_prices()
+        price = get_price(PRICES, product, duration)
+        
+        keyboard = []
+        for qty in [1, 3, 5, 10]:
+            total = qty * price
+            keyboard.append([InlineKeyboardButton(f"{qty}x - ${total}", callback_data=f"buy_qty:{product}:{duration}:{qty}")])
+        keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data=f"buy_product:{product}")])
+        await query.edit_message_text(f"📦 اختر الكمية:\n\nالمنتج: {product}\nالمدة: {duration} يوم\nالسعر الواحد: ${price}" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Buy finalize
+    if data and data.startswith("buy_qty:"):
+        parts = data.split(":")
+        product = parts[1]
+        duration = parts[2]
+        qty = int(parts[3])
+        uid = str(query.from_user.id)
+        PRICES = load_prices()
+        price = get_price(PRICES, product, duration)
+        total_price = qty * price
+        
+        DATA = load_data()
+        balance = DATA.get("balances", {}).get(uid, 0)
+        
+        if balance < total_price:
+            await query.edit_message_text(f"❌ رصيدك غير كافي!\n\nرصيدك: ${balance}\nالمطلوب: ${total_price}" + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]]))
+            return
+        
+        # Get keys
+        keys = get_available_keys(product, duration, qty)
+        if len(keys) < qty:
+            await query.edit_message_text(f"❌ لا توجد مفاتيح كافية!\n\nالمتوفر: {len(keys)}\nالمطلوب: {qty}" + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]]))
+            return
+        
+        # Deduct balance and mark keys
+        DATA["balances"][uid] = balance - total_price
+        save_data(DATA)
+        mark_keys_used(keys, uid)
+        log_sale(uid, product, duration, qty, price, total_price, None, DATA["balances"][uid])
+        
+        keys_text = "\n".join(keys)
+        msg = f"✅ تم الشراء بنجاح!\n\n"
+        msg += f"المنتج: {product}\n"
+        msg += f"المدة: {duration} يوم\n"
+        msg += f"الكمية: {qty}\n"
+        msg += f"السعر الواحد: ${price}\n"
+        msg += f"الإجمالي: ${total_price}\n"
+        msg += f"رصيدك الجديد: ${DATA['balances'][uid]}\n\n"
+        msg += f"🔑 المفاتيح:\n{keys_text}"
+        
+        await query.edit_message_text(msg + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]]))
+        return
+    
     if data and data.startswith("admin_add_keys_duration:"):
         parts = data.split(":")
         product = parts[1]
@@ -513,6 +588,169 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton(f"{info.get('name')} ({sid})", callback_data=f"price_seller:{sid}")])
         keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
         await query.edit_message_text("اختر البائع:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Quick Price Adjust - Select Seller
+    if data == "admin_quick_price":
+        sellers = DATA.get("sellers", {})
+        if not sellers:
+            await query.edit_message_text("لا يوجد بائعون" + SIGNATURE)
+            return
+        
+        keyboard = []
+        for sid, info in sellers.items():
+            keyboard.append([InlineKeyboardButton(f"💰 {info.get('name')}", callback_data=f"quick_price_seller:{sid}")])
+        keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
+        await query.edit_message_text("اختر البائع لتعديل السعر:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Quick Price - Select Product
+    if data and data.startswith("quick_price_seller:"):
+        seller_id = data.split(":")[1]
+        products = list(PRICES.get("global", {}).keys())
+        
+        keyboard = []
+        for prod in products:
+            keyboard.append([InlineKeyboardButton(prod, callback_data=f"quick_price_product:{seller_id}:{prod}")])
+        keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_quick_price")])
+        await query.edit_message_text(f"اختر المنتج:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Quick Price - Select Duration
+    if data and data.startswith("quick_price_product:"):
+        parts = data.split(":")
+        seller_id = parts[1]
+        product = parts[2]
+        
+        durations = list(PRICES.get("global", {}).get(product, {}).keys())
+        keyboard = []
+        for dur in durations:
+            current_price = get_price(PRICES, product, dur, seller_id)
+            default_price = PRICES.get("global", {}).get(product, {}).get(dur, 0)
+            price_text = current_price if current_price else default_price
+            keyboard.append([InlineKeyboardButton(f"{dur} يوم - ${price_text}", callback_data=f"quick_price_adjust:{seller_id}:{product}:{dur}")])
+        keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data=f"quick_price_seller:{seller_id}")])
+        await query.edit_message_text(f"اختر المدة:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Quick Price - Adjust (+/-)
+    if data and data.startswith("quick_price_adjust:"):
+        parts = data.split(":")
+        seller_id = parts[1]
+        product = parts[2]
+        duration = parts[3]
+        
+        current_price = get_price(PRICES, product, duration, seller_id)
+        default_price = PRICES.get("global", {}).get(product, {}).get(duration, 0)
+        price_text = current_price if current_price else default_price
+        
+        keyboard = [
+            [InlineKeyboardButton("➕ +$1", callback_data=f"quick_price_inc:{seller_id}:{product}:{duration}")],
+            [InlineKeyboardButton("➖ -$1", callback_data=f"quick_price_dec:{seller_id}:{product}:{duration}")],
+            [InlineKeyboardButton("⬅️ Back", callback_data=f"quick_price_product:{seller_id}:{product}")]
+        ]
+        
+        msg = f"تعديل السعر:\n\n"
+        msg += f"البائع: {seller_id}\n"
+        msg += f"المنتج: {product}\n"
+        msg += f"المدة: {duration} يوم\n"
+        msg += f"السعر الحالي: ${price_text}"
+        
+        await query.edit_message_text(msg + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Quick Price - Increase
+    if data and data.startswith("quick_price_inc:"):
+        parts = data.split(":")
+        seller_id = parts[1]
+        product = parts[2]
+        duration = parts[3]
+        
+        # Reload prices to get current value
+        PRICES = load_prices()
+        current_price = get_price(PRICES, product, duration, seller_id)
+        default_price = PRICES.get("global", {}).get(product, {}).get(duration, 0)
+        old_price = float(current_price if current_price else default_price)
+        new_price = old_price + 1
+        
+        # Update database
+        conn = get_db_connection()
+        if conn:
+            cur = conn.cursor()
+            try:
+                cur.execute('''
+                    DELETE FROM prices 
+                    WHERE seller_id = %s AND product = %s AND duration = %s
+                ''', (int(seller_id), product, int(duration)))
+                
+                cur.execute('''
+                    INSERT INTO prices (product, duration, seller_id, price)
+                    VALUES (%s, %s, %s, %s)
+                ''', (product, int(duration), int(seller_id), float(new_price)))
+                
+                conn.commit()
+                print(f"✅ Price increased: Seller {seller_id}, {product} {duration}d: {old_price} → {new_price}")
+            except Exception as db_err:
+                print(f"❌ DB Error: {db_err}")
+                conn.rollback()
+            finally:
+                cur.close()
+                conn.close()
+        
+        msg = f"✅ تم زيادة السعر!\n\n"
+        msg += f"البائع: {seller_id}\n"
+        msg += f"المنتج: {product}\n"
+        msg += f"المدة: {duration} يوم\n"
+        msg += f"${old_price} → ${new_price}"
+        
+        await query.edit_message_text(msg + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_quick_price")]]))
+        return
+    
+    # Quick Price - Decrease
+    if data and data.startswith("quick_price_dec:"):
+        parts = data.split(":")
+        seller_id = parts[1]
+        product = parts[2]
+        duration = parts[3]
+        
+        # Reload prices to get current value
+        PRICES = load_prices()
+        current_price = get_price(PRICES, product, duration, seller_id)
+        default_price = PRICES.get("global", {}).get(product, {}).get(duration, 0)
+        old_price = float(current_price if current_price else default_price)
+        new_price = max(0, old_price - 1)
+        
+        # Update database
+        conn = get_db_connection()
+        if conn:
+            cur = conn.cursor()
+            try:
+                cur.execute('''
+                    DELETE FROM prices 
+                    WHERE seller_id = %s AND product = %s AND duration = %s
+                ''', (int(seller_id), product, int(duration)))
+                
+                cur.execute('''
+                    INSERT INTO prices (product, duration, seller_id, price)
+                    VALUES (%s, %s, %s, %s)
+                ''', (product, int(duration), int(seller_id), float(new_price)))
+                
+                conn.commit()
+                print(f"✅ Price decreased: Seller {seller_id}, {product} {duration}d: {old_price} → {new_price}")
+            except Exception as db_err:
+                print(f"❌ DB Error: {db_err}")
+                conn.rollback()
+            finally:
+                cur.close()
+                conn.close()
+        
+        msg = f"✅ تم تقليل السعر!\n\n"
+        msg += f"البائع: {seller_id}\n"
+        msg += f"المنتج: {product}\n"
+        msg += f"المدة: {duration} يوم\n"
+        msg += f"${old_price} → ${new_price}"
+        
+        await query.edit_message_text(msg + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_quick_price")]]))
         return
     
     # Change seller prices - Step 2: Select Product
@@ -634,7 +872,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Handle main menu buttons
     if text == "🛍️ شراء مفاتيح" or text == "🛍️ BUY KEYS":
-        await update.message.reply_text("اختر المنتج:" if lang == "ar" else "Select a product:")
+        PRICES = load_prices()
+        products = list(PRICES.get("global", {}).keys())
+        keyboard = []
+        for prod in products:
+            keyboard.append([InlineKeyboardButton(prod, callback_data=f"buy_product:{prod}")])
+        keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")])
+        await update.message.reply_text("اختر المنتج:" if lang == "ar" else "Select a product:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
         return
     
     if text == "💰 رصيدي" or text == "💰 MY BALANCE":
@@ -664,24 +908,46 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Handle change seller price
     if action == "change_seller_price":
         try:
-            seller_id = context.user_data.get("seller_id")
-            product = context.user_data.get("product")
+            seller_id = str(context.user_data.get("seller_id"))
+            product = str(context.user_data.get("product"))
             duration = str(context.user_data.get("duration"))
             price = float(text)
             
-            prices = load_prices()
-            if seller_id not in prices.get("sellers", {}):
-                prices.setdefault("sellers", {})[seller_id] = {}
-            if product not in prices["sellers"][seller_id]:
-                prices["sellers"][seller_id][product] = {}
+            # Direct database insert
+            conn = get_db_connection()
+            if conn:
+                cur = conn.cursor()
+                try:
+                    cur.execute('''
+                        DELETE FROM prices 
+                        WHERE seller_id = %s AND product = %s AND duration = %s
+                    ''', (int(seller_id), product, int(duration)))
+                    
+                    cur.execute('''
+                        INSERT INTO prices (product, duration, seller_id, price)
+                        VALUES (%s, %s, %s, %s)
+                    ''', (product, int(duration), int(seller_id), float(price)))
+                    
+                    conn.commit()
+                    print(f"✅ Price updated: Seller {seller_id}, Product {product}, Duration {duration}, Price {price}")
+                except Exception as db_err:
+                    print(f"❌ DB Error: {db_err}")
+                    conn.rollback()
+                finally:
+                    cur.close()
+                    conn.close()
             
-            prices["sellers"][seller_id][product][duration] = price
-            save_prices(prices)
+            # Verify the price was saved
+            prices_after = load_prices()
+            saved_price = get_price(prices_after, product, duration, seller_id)
             
-            await update.message.reply_text(f"✅ تم تحديث السعر!\n\nالبائع: {seller_id}\nالمنتج: {product}\nالمدة: {duration}يوم\nالسعر الجديد: ${price}" + SIGNATURE)
+            msg = f"✅ تم تحديث السعر!\n\nالبائع: {seller_id}\nالمنتج: {product}\nالمدة: {duration} يوم\n"
+            msg += f"السعر الجديد: ${price}\nالسعر المحفوظ: ${saved_price}"
+            
+            await update.message.reply_text(msg + SIGNATURE)
             context.user_data.pop("admin_action", None)
-        except:
-            await update.message.reply_text("❌ أدخل رقماً صحيحاً" + SIGNATURE)
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطأ: {str(e)}" + SIGNATURE)
         return
     
     # Handle admin add keys
@@ -724,9 +990,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== MAIN ==========
 def main():
-    if not TOKEN or TOKEN == "YOUR_BOT_TOKEN_2":
-        print("Error: Set your BOT TOKEN!")
-        return
+    if not TOKEN:
+        print("❌ ERROR: TOKEN_BOT_2 environment variable not set!")
+        print("\nHow to fix:")
+        print("1. Go to Render Dashboard")
+        print("2. Select your service")
+        print("3. Go to 'Environment' tab")
+        print("4. Add: TOKEN_BOT_2 = your_real_bot_token")
+        print("5. Redeploy the service")
+        sys.exit(1)
+    
+    print(f"✅ Bot token loaded successfully")
+    print(f"✅ Admin code: {ADMIN_CODE}")
+    print(f"✅ Database: {DATABASE_URL[:50]}...")
     
     init_db()
     
@@ -735,12 +1011,12 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    print("Bot 2 running...")
+    print("✅ Bot 2 starting...")
     try:
         app.run_polling(drop_pending_updates=True)
     except Exception as e:
-        print(f"Error: {e}")
-        return
+        print(f"❌ Error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

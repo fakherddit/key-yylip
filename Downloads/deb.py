@@ -8,6 +8,12 @@ import json
 import os
 import shutil
 from datetime import datetime
+import sys
+import io
+
+# تعيين UTF-8 للإخراج
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # الإعدادات
 DB_PATH = os.getenv("DB_PATH", "bot.db")

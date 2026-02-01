@@ -4,412 +4,66 @@ import telegram
 import os
 from datetime import datetime
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-import sqlite3
 
-# Read from environment variables
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_CODE = os.getenv("ADMIN_CODE", "123123NNK")
-SIGNATURE = "\n\n© @FAKHERDDIN5"
-SELLER_CHANNEL_URL = "https://t.me/stonexff"
-DB_PATH = os.getenv("DB_PATH", "bot.db")
+TOKEN = "8556759518:AAEwqAGVyccVnqbZPz3gWOPukXmafFiq-gs"  # PUT YOUR BOT TOKEN HERE!
+ADMIN_CODE = "ADRIAN221409"
+ADMIN_IDS = ["7828131818"]
+SIGNATURE = "\n\n© @ADRIAN_IOSX"
+DATA_FILE = "bot_data.json"
+PRICES_FILE = "prices.json"
+SELLER_CHANNEL_URL = "@ADRIAN_IOSX"
 
-# Database connection
-def get_db_connection():
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn
-    except Exception as e:
-        print(f"Database connection error: {e}")
-        # If database is corrupted, remove it and create a new one
-        if "file is not a database" in str(e):
-            print(f"🔧 Removing corrupted database: {DB_PATH}")
-            try:
-                os.remove(DB_PATH)
-                print("✅ Creating new database...")
-                conn = sqlite3.connect(DB_PATH)
-                conn.row_factory = sqlite3.Row
-                return conn
-            except Exception as remove_error:
-                print(f"Failed to remove corrupted database: {remove_error}")
-        return None
-
-def init_db():
-    conn = get_db_connection()
-    if not conn:
-        return
-    cur = conn.cursor()
-    try:
-        # Users table
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                balance REAL DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Sellers table
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS sellers (
-                seller_id INTEGER PRIMARY KEY,
-                name TEXT,
-                balance REAL DEFAULT 0,
-                sales_count INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Keys table
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS keys (
-                key_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product TEXT,
-                duration INTEGER,
-                key_value TEXT UNIQUE,
-                is_used BOOLEAN DEFAULT 0,
-                sold_to INTEGER,
-                sold_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Prices table
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS prices (
-                price_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product TEXT,
-                duration INTEGER,
-                seller_id INTEGER,
-                price REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Sales log table
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS sales_log (
-                sale_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                buyer_id INTEGER,
-                product TEXT,
-                duration INTEGER,
-                qty INTEGER,
-                unit_price REAL,
-                total_price REAL,
-                seller_id INTEGER,
-                buyer_balance REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Stats table
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS stats (
-                stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                start_clicks INTEGER DEFAULT 0,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # Ensure stats row exists
-        cur.execute('INSERT OR IGNORE INTO stats (stat_id, start_clicks) VALUES (1, 0)')
-        
-        conn.commit()
-        print("Database initialized successfully!")
-    except Exception as e:
-        print(f"Error initializing database: {e}")
-        conn.rollback()
-    finally:
-        cur.close()
-        conn.close()
 
 def load_data():
-    conn = get_db_connection()
-    if not conn:
-        return {
-            "balances": {},
-            "sellers": {},
-            "keys": {},
-            "users": [],
-            "files": {},
-            "sales_log": [],
-            "start_clicks": 0,
-            "used_keys": []
-        }
-    
-    cur = conn.cursor()
-    data = {
-        "balances": {},
-        "sellers": {},
-        "keys": {},
-        "users": [],
-        "files": {},
-        "sales_log": [],
-        "start_clicks": 0,
-        "used_keys": []
-    }
-    
-    try:
-        # Load users and balances
-        cur.execute('SELECT user_id, balance FROM users')
-        for row in cur.fetchall():
-            data["balances"][str(row['user_id'])] = row['balance']
-            data["users"].append(str(row['user_id']))
-        
-        # Load sellers
-        cur.execute('SELECT seller_id, name, balance, sales_count FROM sellers')
-        for row in cur.fetchall():
-            data["sellers"][str(row['seller_id'])] = {
-                "name": row['name'],
-                "balance": row['balance'],
-                "sales_count": row['sales_count']
-            }
-        
-        # Load keys
-        cur.execute('SELECT product, duration, key_value, is_used FROM keys ORDER BY created_at')
-        for row in cur.fetchall():
-            key_name = f"{row['product']}_{row['duration']}"
-            if key_name not in data["keys"]:
-                data["keys"][key_name] = []
-            data["keys"][key_name].append(row['key_value'])
-            if row['is_used']:
-                data["used_keys"].append(row['key_value'])
-        
-        # Load sales log
-        cur.execute('SELECT buyer_id, product, duration, qty, unit_price, total_price, seller_id, buyer_balance FROM sales_log ORDER BY created_at DESC LIMIT 100')
-        for row in cur.fetchall():
-            data["sales_log"].append({
-                "user": str(row['buyer_id']),
-                "product": row['product'],
-                "duration": str(row['duration']),
-                "qty": row['qty'],
-                "unit_price": row['unit_price'],
-                "total_price": row['total_price'],
-                "seller_id": str(row['seller_id']) if row['seller_id'] else None,
-                "buyer_balance": row['buyer_balance']
-            })
-        
-        # Load stats
-        cur.execute('SELECT start_clicks FROM stats WHERE stat_id = 1')
-        row = cur.fetchone()
-        if row:
-            data["start_clicks"] = row['start_clicks']
-    
-    except Exception as e:
-        print(f"Error loading data: {e}")
-    finally:
-        cur.close()
-        conn.close()
-    
-    return data
+  try:
+      with open(DATA_FILE, "r", encoding='utf-8') as f:
+          return json.load(f)
+  except:
+      return {
+          "balances": {},
+          "sellers": {},
+          "keys": {},
+          "users": [],
+          "files": {},
+          "sales_log": [],
+          "start_clicks": 0,
+          "used_keys": [],
+          "approved_users": [],
+          "pending_users": []
+      }
+
 
 def save_data(data):
-    conn = get_db_connection()
-    if not conn:
-        return
-    
-    cur = conn.cursor()
-    try:
-        # Update or insert users and balances
-        for uid, balance in data.get("balances", {}).items():
-            cur.execute('''
-                INSERT OR REPLACE INTO users (user_id, balance)
-                VALUES (?, ?)
-            ''', (int(uid), balance))
-        
-        # Update sellers
-        for sid, info in data.get("sellers", {}).items():
-            cur.execute('''
-                INSERT OR REPLACE INTO sellers (seller_id, name, balance, sales_count)
-                VALUES (?, ?, ?, ?)
-            ''', (int(sid), info.get("name"), info.get("balance", 0), info.get("sales_count", 0)))
-        
-        # Update start_clicks
-        cur.execute('UPDATE stats SET start_clicks = ? WHERE stat_id = 1', 
-                   (data.get("start_clicks", 0),))
-        
-        conn.commit()
-    except Exception as e:
-        print(f"Error saving data: {e}")
-        conn.rollback()
-    finally:
-        cur.close()
-        conn.close()
+  with open(DATA_FILE, "w", encoding='utf-8') as f:
+      json.dump(data, f, indent=2, ensure_ascii=False)
+
 
 def load_prices():
-    conn = get_db_connection()
-    if not conn:
-        return {
-            "global": {
-                "FREE": {"1": 3, "7": 7, "31": 13},
-                "WIZARD": {"1": 3, "7": 7, "31": 13},
-                "DRIP": {"1": 2, "7": 5, "15": 8, "31": 12},
-                "CERT": {"365": 6},
-            },
-            "sellers": {}
-        }
-    
-    cur = conn.cursor()
-    prices = {"global": {}, "sellers": {}}
-    
-    try:
-        # Load global prices
-        cur.execute('SELECT product, duration, price FROM prices WHERE seller_id IS NULL')
-        for row in cur.fetchall():
-            if row['product'] not in prices["global"]:
-                prices["global"][row['product']] = {}
-            prices["global"][row['product']][str(row['duration'])] = row['price']
-        
-        # If no global prices, load defaults
-        if not prices["global"]:
-            default = {
-                "FREE": {"1": 3, "7": 7, "31": 13},
-                "WIZARD": {"1": 3, "7": 7, "31": 13},
-                "DRIP": {"1": 2, "7": 5, "15": 8, "31": 12},
-                "CERT": {"365": 6},
-            }
-            prices["global"] = default
-            save_prices(prices)
-        
-        # Load seller prices
-        cur.execute('SELECT seller_id, product, duration, price FROM prices WHERE seller_id IS NOT NULL')
-        for row in cur.fetchall():
-            sid = str(row['seller_id'])
-            if sid not in prices["sellers"]:
-                prices["sellers"][sid] = {}
-            if row['product'] not in prices["sellers"][sid]:
-                prices["sellers"][sid][row['product']] = {}
-            prices["sellers"][sid][row['product']][str(row['duration'])] = row['price']
-    
-    except Exception as e:
-        print(f"Error loading prices: {e}")
-    finally:
-        cur.close()
-        conn.close()
-    
-    return prices
+  try:
+      with open(PRICES_FILE, "r", encoding='utf-8') as f:
+          return json.load(f)
+  except:
+      default = {
+          "global": {
+              "FREE": {"1": 4, "7": 9, "31": 15},
+              "WIZARD": {"1": 4, "7": 8, "31": 15},
+              "DRIP": {"1": 3, "7": 4, "15": 9, "31": 14},
+              "CERT": {"VIP": 7},
+           
+          },
+          "sellers": {}
+      }
+      save_prices(default)
+      return default
+
 
 def save_prices(prices):
-    conn = get_db_connection()
-    if not conn:
-        return
-    
-    cur = conn.cursor()
-    try:
-        # Clear existing prices
-        cur.execute('DELETE FROM prices')
-        
-        # Save global prices
-        for product, durations in prices.get("global", {}).items():
-            for duration, price in durations.items():
-                cur.execute('''
-                    INSERT INTO prices (product, duration, price)
-                    VALUES (?, ?, ?)
-                ''', (product, int(duration), price))
-        
-        # Save seller prices
-        for seller_id, products in prices.get("sellers", {}).items():
-            for product, durations in products.items():
-                for duration, price in durations.items():
-                    cur.execute('''
-                        INSERT INTO prices (product, duration, seller_id, price)
-                        VALUES (?, ?, ?, ?)
-                    ''', (product, int(duration), int(seller_id), price))
-        
-        conn.commit()
-    except Exception as e:
-        print(f"Error saving prices: {e}")
-        conn.rollback()
-    finally:
-        cur.close()
-        conn.close()
+  with open(PRICES_FILE, "w", encoding='utf-8') as f:
+      json.dump(prices, f, indent=2, ensure_ascii=False)
 
 
 def key_storage_name(prod, dur):
   return f"{prod}_{dur}"
-
-def add_keys_to_db(product, duration, keys):
-    conn = get_db_connection()
-    if not conn:
-        return
-    
-    cur = conn.cursor()
-    try:
-        for key in keys:
-            cur.execute('''
-                INSERT OR IGNORE INTO keys (product, duration, key_value)
-                VALUES (?, ?, ?)
-            ''', (product, int(duration), key))
-        conn.commit()
-    except Exception as e:
-        print(f"Error adding keys: {e}")
-        conn.rollback()
-    finally:
-        cur.close()
-        conn.close()
-
-def get_available_keys(product, duration, count):
-    conn = get_db_connection()
-    if not conn:
-        return []
-    
-    cur = conn.cursor()
-    keys = []
-    try:
-        cur.execute('''
-            SELECT key_id, key_value FROM keys 
-            WHERE product = ? AND duration = ? AND is_used = 0 
-            LIMIT ?
-        ''', (product, int(duration), count))
-        keys = [row['key_value'] for row in cur.fetchall()]
-    except Exception as e:
-        print(f"Error getting keys: {e}")
-    finally:
-        cur.close()
-        conn.close()
-    
-    return keys
-
-def mark_keys_used(keys, buyer_id):
-    conn = get_db_connection()
-    if not conn:
-        return
-    
-    cur = conn.cursor()
-    try:
-        for key in keys:
-            cur.execute('''
-                UPDATE keys SET is_used = 1, sold_to = ?, sold_at = CURRENT_TIMESTAMP
-                WHERE key_value = ?
-            ''', (int(buyer_id), key))
-        conn.commit()
-    except Exception as e:
-        print(f"Error marking keys as used: {e}")
-        conn.rollback()
-    finally:
-        cur.close()
-        conn.close()
-
-def log_sale(buyer_id, product, duration, qty, unit_price, total_price, seller_id, buyer_balance):
-    conn = get_db_connection()
-    if not conn:
-        return
-    
-    cur = conn.cursor()
-    try:
-        cur.execute('''
-            INSERT INTO sales_log (buyer_id, product, duration, qty, unit_price, total_price, seller_id, buyer_balance)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (int(buyer_id), product, int(duration), qty, unit_price, total_price, 
-              int(seller_id) if seller_id else None, buyer_balance))
-        conn.commit()
-    except Exception as e:
-        print(f"Error logging sale: {e}")
-        conn.rollback()
-    finally:
-        cur.close()
-        conn.close()
 
 
 def get_uid_from_update(update: Update):
@@ -451,6 +105,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
   except Exception:
       uid = None
   DATA_START = load_data()
+  # Approval gate (admins bypass)
+  uid = None
+  try:
+      if getattr(update, "message", None):
+          uid = str(update.message.from_user.id)
+      elif getattr(update, "callback_query", None):
+          uid = str(update.callback_query.from_user.id)
+  except Exception:
+      uid = None
+  admins = set(DATA_START.get("admins", []))
+  approved = set(DATA_START.get("approved_users", []))
+  if uid and uid not in admins and uid not in approved:
+      DATA_START.setdefault("pending_users", [])
+      if uid not in DATA_START["pending_users"]:
+          DATA_START["pending_users"].append(uid)
+          save_data(DATA_START)
+      msg = "⏳ Your account is pending admin approval. Please wait." if lang == "en" else "⏳ حسابك قيد المراجعة من الأدمن. الرجاء الانتظار."
+      if getattr(update, "message", None):
+          await update.message.reply_text(msg + SIGNATURE)
+      elif getattr(update, "callback_query", None):
+          await update.callback_query.message.reply_text(msg + SIGNATURE)
+      return
   reply_keyboard = [[button_texts["buy"][lang]], [button_texts["balance"][lang]],[button_texts["admin"][lang]]]
   # always offer Get Files — customers who purchased will see their products
   reply_keyboard.append([button_texts["get_files"][lang]])
@@ -540,61 +216,80 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
           [InlineKeyboardButton("💳 Add Balance", callback_data="admin_add_balance")],
           [InlineKeyboardButton("💸 Withdraw", callback_data="admin_withdraw")],
           [InlineKeyboardButton("🔑 Add Keys", callback_data="admin_add_keys")],
+          [InlineKeyboardButton("💲 Seller Prices", callback_data="admin_edit_seller_prices")],
+          [InlineKeyboardButton("✅ Approve User", callback_data="admin_approve_user")],
           [InlineKeyboardButton("➕ Add Seller", callback_data="admin_add_seller_cb")],
           [InlineKeyboardButton("➖ Remove Seller", callback_data="admin_remove_seller_cb")],
           [InlineKeyboardButton("📋 List Sellers", callback_data="admin_list_sellers")],
           [InlineKeyboardButton("💰 Sellers Balance", callback_data="admin_sellers")],
-          [InlineKeyboardButton("� Change Seller Prices", callback_data="admin_change_seller_prices")],
-          [InlineKeyboardButton("�🔑 Available Keys", callback_data="admin_available_keys")],
+          [InlineKeyboardButton("🔑 Available Keys", callback_data="admin_available_keys")],
+          [InlineKeyboardButton("🔑 Sold Keys", callback_data="admin_sold_keys")],
+          [InlineKeyboardButton("🔑 Not Sold Keys", callback_data="admin_not_sold_keys")],
+          [InlineKeyboardButton("📈 Total Sales by Sellers", callback_data="admin_total_sales_sellers")],
           [InlineKeyboardButton("📢 Broadcast Message", callback_data="admin_broadcast")],
+          [InlineKeyboardButton("🟢 Toggle Seller Work", callback_data="admin_toggle_seller_work")],
           [InlineKeyboardButton("📝 آخر عمليات الشراء", callback_data="admin_last_sales")],
           [InlineKeyboardButton("📊 Activity", callback_data="show_activity")],
-          [InlineKeyboardButton("🧾 جميع أرصدة اللاعبين", callback_data="admin_all_balances")],
-          [InlineKeyboardButton("🗝️ سحب المفاتيح", callback_data="admin_withdraw_keys")],
-          [InlineKeyboardButton("🗂️ جميع المفاتيح والعوائد", callback_data="admin_keys_revenue")],
           [InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]
       ]
       await query.edit_message_text("قائمة الأدمن:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(admin_keyboard))
       return
-  # Show all player balances
-  if data == "admin_all_balances":
+  # Admin: Show all sold keys
+  if data == "admin_sold_keys":
       DATA = load_data()
-      balances = DATA.get("balances", {})
-      users = DATA.get("users", [])
-      msg = "🧾 جميع أرصدة اللاعبين:\n\n"
-      for uid in users:
-          bal = balances.get(uid, 0)
-          msg += f"• {uid}: ${bal}\n"
-      await query.edit_message_text(msg + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
-      return
-
-  # Withdraw keys (admin)
-  if data == "admin_withdraw_keys":
-      context.user_data.clear()
-      context.user_data["admin_action"] = "withdraw_keys"
-      await query.edit_message_text("أدخل اسم المنتج والمدة وعدد المفاتيح للسحب (مثال: FREE 7 2)" + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
-      return
-
-  # Show all keys (sold/unsold) and revenue
-  if data == "admin_keys_revenue":
-      DATA = load_data()
-      PRICES = load_prices()
-      keys_data = DATA.get("keys", {})
       used_keys = set(DATA.get("used_keys", []))
-      sales_log = DATA.get("sales_log", [])
-      msg = "🗂️ جميع المفاتيح:\n\n"
-      total_revenue = 0
+      keys_data = DATA.get("keys", {})
+      msg = "🔑 المفاتيح المباعة (Sold Keys):\n\n"
+      found = False
       for prod_dur, keys in keys_data.items():
           sold = [k for k in keys if k in used_keys]
-          unsold = [k for k in keys if k not in used_keys]
-          msg += f"{prod_dur}:\n  المباعة: {len(sold)}\n  الغير مباعة: {len(unsold)}\n"
-      # Revenue calculation
-      for sale in sales_log:
-          try:
-              total_revenue += float(sale.get("price", 0))
-          except Exception:
-              pass
-      msg += f"\n💵 مجموع العوائد: ${total_revenue}"
+          if sold:
+              found = True
+              msg += f"{prod_dur}:\n"
+              for k in sold:
+                  msg += f"- `{k}`\n"
+              msg += "\n"
+      if not found:
+          msg += "لا توجد مفاتيح مباعة بعد.\n"
+      await query.edit_message_text(msg + SIGNATURE, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+      return
+
+  # Admin: Show all not sold keys
+  if data == "admin_not_sold_keys":
+      DATA = load_data()
+      used_keys = set(DATA.get("used_keys", []))
+      keys_data = DATA.get("keys", {})
+      msg = "🔑 المفاتيح غير المباعة (Not Sold Keys):\n\n"
+      found = False
+      for prod_dur, keys in keys_data.items():
+          not_sold = [k for k in keys if k not in used_keys]
+          if not_sold:
+              found = True
+              msg += f"{prod_dur}:\n"
+              for k in not_sold:
+                  msg += f"- `{k}`\n"
+              msg += "\n"
+      if not found:
+          msg += "كل المفاتيح تم بيعها.\n"
+      await query.edit_message_text(msg + SIGNATURE, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+      return
+
+  # Admin: Show total sales by all sellers
+  if data == "admin_total_sales_sellers":
+      DATA = load_data()
+      sellers = DATA.get("sellers", {})
+      sales_log = DATA.get("sales_log", [])
+      if not sellers:
+          await query.edit_message_text("لا يوجد بائعون مضافون بعد." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+          return
+      msg = "📈 إجمالي المبيعات من جميع البائعين:\n\n"
+      total_amount = 0
+      for sid, info in sellers.items():
+          seller_sales = [s for s in sales_log if s.get("seller_id") == sid]
+          seller_total = sum(float(s.get("price", 0)) for s in seller_sales)
+          total_amount += seller_total
+          msg += f"• {info.get('name','?')} (ID: {sid})\n  Sales: {len(seller_sales)} | Amount: ${seller_total}\n"
+      msg += f"\n💵 Total amount from all sellers: ${total_amount}"
       await query.edit_message_text(msg + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
       return
 
@@ -664,6 +359,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       context.user_data.clear()
       context.user_data["admin_action"] = "add_seller"
       await query.edit_message_text("أدخل معرف البائع والاسم (مثال: 123456789 @sellername)" + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+      return
+
+  if data == "admin_approve_user":
+      context.user_data.clear()
+      context.user_data["admin_action"] = "approve_user"
+      await query.edit_message_text("أدخل معرف المستخدم للموافقة (مثال: 123456789)" + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
       return
 
   # Remove Seller
@@ -790,7 +491,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
           return
       keyboard = []
       for days, price in sorted(prod_prices.items(), key=lambda x: int(x[0])):
-          btn_text = f"⏱️ {days}يوم - ${price}" if show_prices else f"⏱️ {days}يوم"
+          seller_price = get_price(PRICES, product, days, user_id)
+          final_price = seller_price if seller_price is not None else price
+          btn_text = f"⏱️ {days}يوم - ${final_price}" if show_prices else f"⏱️ {days}يوم"
           keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"choose_qty:{product}:{days}")])
       keyboard.append([InlineKeyboardButton("⬅️ رجوع", callback_data="buy_menu")])
       if show_prices:
@@ -811,69 +514,52 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
   if data and data.startswith("pay:"):
       parts = data.split(":")
       product = parts[1]
-      days = str(parts[2])  # تحويل إلى string
+      days = parts[2]
       qty = int(parts[3]) if len(parts) > 3 else 1
-
-      user_id = str(query.from_user.id)
-
-      DATA = load_data()
-      PRICES = load_prices()
-
-      # إذا كان المستخدم بائع → يستعمل سعره الخاص
-      seller_id = user_id if user_id in DATA.get("sellers", {}) else None
-
-      # السعر الصحيح (سعر البائع إن وجد – وإلا السعر العام)
-      unit_price = get_price(PRICES, product, days, seller_id)
+      buyer_id = str(query.from_user.id)
+      unit_price = get_price(PRICES, product, days, buyer_id)
       if unit_price is None:
-          await query.edit_message_text(
-              f"⚠️ لا يوجد سعر لهذا المنتج {product} لمدة {days} يوم."
-              + SIGNATURE
-          )
+          await query.edit_message_text(f"⚠️ Pricing not configured for {product} {days} days." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="buy_menu")]]))
           return
-
-      total_price = unit_price * qty
-      balance = float(DATA.get("balances", {}).get(user_id, 0))
-
-      if balance < total_price:
-          await query.edit_message_text(
-              f"❌ الرصيد غير كافٍ\n"
-              f"السعر: ${total_price}\n"
-              f"رصيدك: ${balance}"
-              + SIGNATURE
-          )
+      price = unit_price * qty
+      user_id = buyer_id
+      try:
+          balance = float(DATA.get("balances", {}).get(user_id, 0))
+      except Exception:
+          balance = 0
+      key_name = key_storage_name(product, days)
+      keys_pool = [k for k in DATA.get("keys", {}).get(key_name, []) if k not in set(DATA.get("used_keys", []))]
+      if balance < price:
+          await query.edit_message_text(f"❌ Insufficient balance!\nPrice: ${price}\nYour balance: ${balance}" + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="buy_menu")]]))
           return
-
-      # Get available keys from database
-      sold_keys = get_available_keys(product, days, qty)
-      
-      if len(sold_keys) < qty:
-          await query.edit_message_text(
-              "❌ لا يوجد عدد كافٍ من المفاتيح."
-              + SIGNATURE
-          )
+      if len(keys_pool) < qty:
+          await query.edit_message_text(f"❌ Not enough keys available for {product} - {days} days, quantity {qty}." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="buy_menu")]]))
           return
-
-      # Mark keys as used in database
-      mark_keys_used(sold_keys, user_id)
-
-      # خصم الرصيد
-      DATA["balances"][user_id] = balance - total_price
-
-      # تسجيل البيع
-      log_sale(user_id, product, days, qty, unit_price, total_price, seller_id, DATA["balances"][user_id])
-      
+      keys = [keys_pool.pop(0) for _ in range(qty)]
+      DATA.setdefault("used_keys", [])
+      DATA["used_keys"] = list(set(DATA.get("used_keys", [])).union(keys))
+      DATA.setdefault("keys", {})[key_name] = keys_pool
+      DATA.setdefault("balances", {})[user_id] = DATA.get("balances", {}).get(user_id, 0) - price
+      for k in keys:
+          seller_id = str(query.from_user.id) if str(query.from_user.id) in DATA.get("sellers", {}) else None
+          sale_entry = {"user": user_id, "product": product, "duration": days, "price": unit_price}
+          if seller_id:
+              sale_entry["seller_id"] = seller_id
+              # Notify all admins
+              admins = DATA.get("admins", [])
+              seller_balance = DATA.get("balances", {}).get(seller_id, 0)
+              for admin_id in admins:
+                  try:
+                      await context.bot.send_message(
+                          chat_id=int(admin_id),
+                          text=f"🔔 تم بيع مفتاح!\nالمنتج: {product}\nالمدة: {days} يوم\nالبائع: {seller_id}\nالرصيد الحالي للبائع: ${seller_balance}"
+                      )
+                  except Exception:
+                      pass
+          DATA.setdefault("sales_log", []).append(sale_entry)
       save_data(DATA)
-
-      keys_text = "\n".join([f"`{k}`" for k in sold_keys])
-
-      await query.edit_message_text(
-          f"✅ تم الشراء بنجاح\n\n"
-          f"السعر للوحدة: ${unit_price}\n"
-          f"السعر الكلي: ${total_price}\n\n"
-          f"🔑 مفاتيحك:\n{keys_text}"
-          + SIGNATURE,
-          parse_mode="Markdown"
-      )
+      keys_str = "\n".join([f"`{k}`" for k in keys])
+      await query.edit_message_text(f"✅ Purchase successful!\n\nYour keys:\n{keys_str}" + SIGNATURE, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="buy_menu")]]))
       return
 
   # Admin login
@@ -963,6 +649,48 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       keyboard = [[InlineKeyboardButton(prod, callback_data=f"edit_price:{prod}")] for prod in PRICES.get("global", {}).keys()]
       keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
       await query.edit_message_text("Select product to edit prices for:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+      return
+
+  # Admin: set seller-specific prices
+  if data == "admin_edit_seller_prices":
+      DATA = load_data()
+      sellers = DATA.get("sellers", {})
+      if not sellers:
+          await query.edit_message_text("لا يوجد بائعون مضافون بعد." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+          return
+      keyboard = [[InlineKeyboardButton(f"{info.get('name','?')} - {sid}", callback_data=f"admin_edit_seller_prices_choose_seller:{sid}")] for sid, info in sellers.items()]
+      keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
+      await query.edit_message_text("اختر البائع لتعديل الأسعار:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+      return
+
+  if data and data.startswith("admin_edit_seller_prices_choose_seller:"):
+      _, sid = data.split(":", 1)
+      PRICES = load_prices()
+      keyboard = [[InlineKeyboardButton(prod, callback_data=f"admin_edit_seller_prices_choose_product:{sid}:{prod}")] for prod in PRICES.get("global", {}).keys()]
+      keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_edit_seller_prices")])
+      await query.edit_message_text("اختر المنتج لتعديل سعر البائع:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+      return
+
+  if data and data.startswith("admin_edit_seller_prices_choose_product:"):
+      _, sid, prod = data.split(":", 2)
+      PRICES = load_prices()
+      prod_prices = PRICES.get("global", {}).get(prod, {})
+      if not prod_prices:
+          await query.edit_message_text("لا توجد مدد معرفة لهذا المنتج." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"admin_edit_seller_prices_choose_seller:{sid}")]]))
+          return
+      keyboard = [[InlineKeyboardButton(f"{days} يوم", callback_data=f"admin_edit_seller_prices_choose_days:{sid}:{prod}:{days}")] for days in prod_prices.keys()]
+      keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data=f"admin_edit_seller_prices_choose_seller:{sid}")])
+      await query.edit_message_text(f"اختر المدة للمنتج {prod}:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
+      return
+
+  if data and data.startswith("admin_edit_seller_prices_choose_days:"):
+      _, sid, prod, days = data.split(":", 3)
+      context.user_data["admin_action"] = "set_price"
+      context.user_data["edit_price_product"] = prod
+      context.user_data["edit_price_days"] = days
+      context.user_data["edit_price_seller"] = sid
+      await query.edit_message_text(f"أرسل السعر الجديد للبائع {sid} للمنتج {prod} لمدة {days} يوم:" + SIGNATURE,
+          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"admin_edit_seller_prices_choose_product:{sid}:{prod}")]]))
       return
 
   if data and data.startswith("edit_price:"):
@@ -1113,70 +841,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       await query.edit_message_text(f"Send amount to add to seller {sid}:" + SIGNATURE)
       return
 
-  # Admin: Change Seller Prices - Step 1: Select Seller
-  if data == "admin_change_seller_prices":
-      DATA = load_data()
-      sellers = DATA.get("sellers", {})
-      if not sellers:
-          await query.edit_message_text("No sellers configured." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
-          return
-      keyboard = []
-      for sid, info in sellers.items():
-          keyboard.append([InlineKeyboardButton(f"{info.get('name','?')} ({sid})", callback_data=f"admin_select_seller_price:{sid}")])
-      keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")])
-      await query.edit_message_text("Select seller to change their prices:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
-      return
-
-  # Admin: Change Seller Prices - Step 2: Select Product
-  if data and data.startswith("admin_select_seller_price:"):
-      _, seller_id = data.split(":", 1)
-      PRICES = load_prices()
-      products = PRICES.get("global", {}).keys()
-      if not products:
-          await query.edit_message_text("No products configured." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_change_seller_prices")]]))
-          return
-      keyboard = []
-      for prod in products:
-          keyboard.append([InlineKeyboardButton(prod, callback_data=f"admin_seller_edit_product:{seller_id}:{prod}")])
-      keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="admin_change_seller_prices")])
-      await query.edit_message_text(f"Select product for seller {seller_id}:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
-      return
-
-  # Admin: Change Seller Prices - Step 3: Select Duration
-  if data and data.startswith("admin_seller_edit_product:"):
-      parts = data.split(":", 2)
-      seller_id = parts[1]
-      product = parts[2]
-      PRICES = load_prices()
-      durations = PRICES.get("global", {}).get(product, {})
-      if not durations:
-          await query.edit_message_text(f"No durations configured for {product}." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"admin_select_seller_price:{seller_id}")]]))
-          return
-      keyboard = []
-      for duration in durations.keys():
-          current_price = get_price(PRICES, product, duration, seller_id)
-          default_price = PRICES.get("global", {}).get(product, {}).get(duration)
-          keyboard.append([InlineKeyboardButton(f"{duration}d - Current: ${current_price if current_price else default_price}", callback_data=f"admin_seller_edit_price:{seller_id}:{product}:{duration}")])
-      keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data=f"admin_select_seller_price:{seller_id}")])
-      await query.edit_message_text(f"Select duration for {product} (seller {seller_id}):" + SIGNATURE, reply_markup=InlineKeyboardMarkup(keyboard))
-      return
-
-  # Admin: Change Seller Prices - Step 4: Input New Price
-  if data and data.startswith("admin_seller_edit_price:"):
-      parts = data.split(":", 3)
-      seller_id = parts[1]
-      product = parts[2]
-      duration = parts[3]
-      context.user_data["admin_action"] = "admin_set_seller_price"
-      context.user_data["seller_id"] = seller_id
-      context.user_data["product"] = product
-      context.user_data["duration"] = duration
-      PRICES = load_prices()
-      current_price = get_price(PRICES, product, duration, seller_id)
-      default_price = PRICES.get("global", {}).get(product, {}).get(duration)
-      await query.edit_message_text(f"Current price for {product} ({duration}d):\n- Default: ${default_price}\n- Seller {seller_id}: ${current_price if current_price else 'Not Set'}\n\nSend new price for this seller:" + SIGNATURE)
-      return
-
   # Admin broadcast
   if data == "admin_broadcast":
       context.user_data["admin_action"] = "broadcast"
@@ -1297,31 +961,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== MESSAGE HANDLER ==========
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  # Admin: Withdraw keys logic
-  if context.user_data.get("admin_action") == "withdraw_keys":
-      try:
-          parts = text.split()
-          product, duration, qty = parts[0], parts[1], int(parts[2])
-          data = load_data()
-          key_name = f"{product}_{duration}"
-          keys_pool = data["keys"].get(key_name, [])
-          used_keys = set(data.get("used_keys", []))
-          available = [k for k in keys_pool if k not in used_keys]
-          if len(available) < qty:
-              await update.message.reply_text(f"❌ لا يوجد مفاتيح كافية للسحب. المتوفر: {len(available)}" + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
-              return
-          withdrawn = available[:qty]
-          # Mark as used (simulate withdrawal)
-          data.setdefault("used_keys", [])
-          data["used_keys"] = list(set(data.get("used_keys", [])).union(withdrawn))
-          save_data(data)
-          keys_str = "\n".join([f"`{k}`" for k in withdrawn])
-          await update.message.reply_text(f"✅ تم سحب المفاتيح:\n{keys_str}" + SIGNATURE, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
-          context.user_data.pop("admin_action", None)
-      except Exception as e:
-          await update.message.reply_text("❌ صيغة خاطئة. مثال: FREE 7 2" + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
-          context.user_data.pop("admin_action", None)
-      return
   # record user as known
   try:
       DATA_LOCAL = load_data()
@@ -1329,6 +968,24 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       if uid not in DATA_LOCAL.get("users", []):
           DATA_LOCAL.setdefault("users", []).append(uid)
           save_data(DATA_LOCAL)
+  except Exception:
+      pass
+
+  # Approval gate (admins bypass)
+  try:
+      DATA_LOCAL = load_data()
+      uid = str(update.message.from_user.id)
+      admins = set(DATA_LOCAL.get("admins", []))
+      approved = set(DATA_LOCAL.get("approved_users", []))
+      if uid not in admins and uid not in approved:
+          DATA_LOCAL.setdefault("pending_users", [])
+          if uid not in DATA_LOCAL["pending_users"]:
+              DATA_LOCAL["pending_users"].append(uid)
+              save_data(DATA_LOCAL)
+          lang = context.user_data.get("lang", "en")
+          msg = "⏳ Your account is pending admin approval. Please wait." if lang == "en" else "⏳ حسابك قيد المراجعة من الأدمن. الرجاء الانتظار."
+          await update.message.reply_text(msg + SIGNATURE)
+          return
   except Exception:
       pass
 
@@ -1694,8 +1351,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       selected_duration = context.user_data.get("selected_duration")
       PRICES = load_prices()
       DATA = load_data()
-      price = PRICES["global"][selected_product][selected_duration] * qty
       user_id = str(update.message.from_user.id)
+      seller_id = user_id if user_id in DATA.get("sellers", {}) else None
+      unit_price = get_price(PRICES, selected_product, selected_duration, seller_id)
+      if unit_price is None:
+          await update.message.reply_text("⚠️ No pricing/config found for this product/duration." + SIGNATURE)
+          return
+      price = unit_price * qty
       try:
           balance = float(DATA["balances"].get(user_id, 0))
       except:
@@ -1727,7 +1389,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       DATA["keys"][key_name] = keys_pool
       DATA["balances"][user_id] = balance - price
       for k in keys:
-          sale_entry = {"user": user_id, "product": selected_product, "duration": selected_duration, "price": PRICES["global"][selected_product][selected_duration], "buyer_balance": balance - price}
+          sale_entry = {"user": user_id, "product": selected_product, "duration": selected_duration, "price": unit_price, "buyer_balance": balance - price}
           DATA["sales_log"].append(sale_entry)
       # Notify all admins about the purchase
       admins = DATA.get("admins", [])
@@ -1805,6 +1467,24 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
           await update.message.reply_text("❌ Wrong format: user_id amount" + SIGNATURE,
               reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
       return
+  if action == "approve_user":
+      try:
+          target_uid = text.strip()
+          data = load_data()
+          data.setdefault("approved_users", [])
+          data.setdefault("pending_users", [])
+          if target_uid not in data["approved_users"]:
+              data["approved_users"].append(target_uid)
+          if target_uid in data["pending_users"]:
+              data["pending_users"].remove(target_uid)
+          save_data(data)
+          await update.message.reply_text(f"✅ تم قبول المستخدم {target_uid}." + SIGNATURE,
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+          context.user_data.pop("admin_action", None)
+      except Exception:
+          await update.message.reply_text("❌ خطأ في المعرف." + SIGNATURE,
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+      return
   if action == "withdraw":
       try:
           parts = text.split()
@@ -1833,18 +1513,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       if not keys:
           await update.message.reply_text("❌ لم يتم إدخال أي مفاتيح. أرسل المفاتيح (كل مفتاح في سطر)." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"admin_add_keys_duration:{product}:{duration}")]]))
           return
-      
-      # Add keys to database
-      add_keys_to_db(product, duration, keys)
-      
-      # Also update local data
       data = load_data()
       key_name = f"{product}_{duration}"
       if key_name not in data["keys"]:
           data["keys"][key_name] = []
       data["keys"][key_name].extend(keys)
       save_data(data)
-      
       await update.message.reply_text(f"✅ تم إضافة {len(keys)} مفتاح لـ {product} ({duration}يوم)." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data=f"admin_add_keys_product:{product}")]]))
       context.user_data.clear()
       return
@@ -1863,30 +1537,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
           await update.message.reply_text("❌ Wrong format: amount" + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_sellers")]]))
       context.user_data.pop("admin_action", None)
       context.user_data.pop("target_seller", None)
-      return
-  if action == "admin_set_seller_price":
-      seller_id = context.user_data.get("seller_id")
-      product = context.user_data.get("product")
-      duration = str(context.user_data.get("duration"))  # تحويل إلى string
-      try:
-          price_val = float(text)
-          prices = load_prices()
-          if seller_id not in prices.get("sellers", {}):
-              prices.setdefault("sellers", {})[seller_id] = {}
-          if product not in prices["sellers"][seller_id]:
-              prices["sellers"][seller_id][product] = {}
-          prices["sellers"][seller_id][product][duration] = price_val
-          save_prices(prices)
-          await update.message.reply_text(
-              f"✅ تم تعديل سعر البائع!\n\nالبائع: {seller_id}\nالمنتج: {product}\nالمدة: {duration} يوم\nالسعر الجديد: ${price_val}" + SIGNATURE,
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data=f"admin_select_seller_price:{seller_id}")]]))
-      except Exception as e:
-          await update.message.reply_text("❌ أدخل رقم صحيح للسعر." + SIGNATURE,
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data=f"admin_seller_edit_price:{seller_id}:{product}:{duration}")]]))
-      context.user_data.pop("admin_action", None)
-      context.user_data.pop("seller_id", None)
-      context.user_data.pop("product", None)
-      context.user_data.pop("duration", None)
       return
   if action == "create_key":
       product = context.user_data.get("create_key_product")
@@ -1975,20 +1625,19 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========== MAIN ==========
 def main():
- if not TOKEN:
-     print("❌ Error: TELEGRAM_BOT_TOKEN not set!")
-     print("📝 Set it as an environment variable on Render:")
-     print("   1. Go to Dashboard → Your Service")
-     print("   2. Click Environment")
-     print("   3. Add: TELEGRAM_BOT_TOKEN = 8216359066:AAG5awNOda7BbYaT_fclc-tZBvNTWuqht98")
-     print("   4. Click Save")
-     print("   5. Go back and click 'Redeploy' or restart the service")
+ if not TOKEN or TOKEN == "YOUR_BOT_TOKEN_HERE":
+     print("Error: Set your TELEGRAM_BOT_TOKEN in the code!")
      return
- 
- print("✅ Token found!")
- # Initialize database
- init_db()
- 
+ # ensure default admins are stored
+ try:
+     data = load_data()
+     data.setdefault("admins", [])
+     for admin_id in ADMIN_IDS:
+         if admin_id not in data["admins"]:
+             data["admins"].append(admin_id)
+     save_data(data)
+ except Exception:
+     pass
  app = Application.builder().token(TOKEN).build()
  app.add_handler(CommandHandler("start", start))
  app.add_handler(CallbackQueryHandler(callback_handler))
