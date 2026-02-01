@@ -83,6 +83,48 @@ def telegram_webhook():
     print(f"Update: {update}") 
     if not update: 
         return "OK", 200
+
+    if "callback_query" in update:
+        callback = update["callback_query"]
+        chat_id = callback.get("message", {}).get("chat", {}).get("id")
+        data = callback.get("data", "")
+        user_id = callback.get("from", {}).get("id")
+
+        if user_id != TELEGRAM_ADMIN_ID:
+            send_telegram(chat_id, "⛔ Unauthorized")
+            answer_callback(callback.get("id"))
+            return "OK", 200
+
+        if data.startswith("gen_"):
+            _, count, days = data.split("_")
+            new_keys = generate_new_keys(int(count), int(days), "standard")
+            response = f"✅ <b>Generated {count} Key(s)</b>\n\n" + "\n".join([f"<code>{k}</code>" for k in new_keys])
+            send_telegram(chat_id, response)
+        elif data.startswith("global_"):
+            _, days = data.split("_")
+            day_count = int(days)
+            new_keys = generate_new_keys(1, day_count, f"global_{day_count}")
+            response = f"🌍 <b>Global Key ({day_count} Days)</b>\n\n<code>{new_keys[0]}</code>"
+            send_telegram(chat_id, response)
+        elif data == "toggle_server":
+            toggle_setting(chat_id, "server_enabled", "Server")
+        elif data == "toggle_validation":
+            toggle_setting(chat_id, "key_validation_enabled", "Validation")
+        elif data == "toggle_creation":
+            toggle_setting(chat_id, "key_creation_enabled", "Creation")
+        elif data == "menu_main":
+            send_main_menu(chat_id)
+        elif data == "menu_generate":
+            send_generate_menu(chat_id)
+        elif data == "menu_global":
+            send_global_menu(chat_id)
+        elif data == "menu_control":
+            send_control_menu(chat_id)
+        elif data == "menu_stats":
+            send_status(chat_id)
+
+        answer_callback(callback.get("id"))
+        return "OK", 200
     
     if "message" in update:
         msg = update["message"]
@@ -91,33 +133,33 @@ def telegram_webhook():
         user_id = msg.get("from", {}).get("id")
 
         if user_id != TELEGRAM_ADMIN_ID:
-            send_telegram(chat_id, "? Unauthorized")
+            send_telegram(chat_id, "⛔ Unauthorized")
             return "OK", 200
 
         if text == "/start":
-            send_telegram(chat_id, "?? <b>Owner Menu</b>\n\n/gen 1 30 - Generate 1 key for 30 days\n/status - Server Status")
-        elif text.startswith("/gen"):
-            # Format: /gen <count> <days>
-            parts = text.split()
-            count = 1
-            days = 30
-            if len(parts) > 1: count = int(parts[1])
-            if len(parts) > 2: days = int(parts[2])
-            
-            new_keys = generate_new_keys(count, days)
-            response = f"? <b>Generated {count} Key(s)</b>\n\n"
-            for k in new_keys:
-                response += f"<code>{k}</code>\n"
-            send_telegram(chat_id, response)
+            send_main_menu(chat_id)
+        elif text == "/menu":
+            send_main_menu(chat_id)
+        elif text == "/generate":
+            send_generate_menu(chat_id)
+        elif text == "/global":
+            send_global_menu(chat_id)
+        elif text == "/control":
+            send_control_menu(chat_id)
         elif text == "/status":
-            d = load_data()
-            count = len(d["keys"])
-            send_telegram(chat_id, f"?? <b>Status</b>\n\nTotal Keys: {count}")
+            send_status(chat_id)
+        elif text.startswith("/gen"):
+            parts = text.split()
+            count = int(parts[1]) if len(parts) > 1 else 1
+            days = int(parts[2]) if len(parts) > 2 else 30
+            new_keys = generate_new_keys(count, days, "standard")
+            response = f"✅ <b>Generated {count} Key(s)</b>\n\n" + "\n".join([f"<code>{k}</code>" for k in new_keys])
+            send_telegram(chat_id, response)
 
     return "OK", 200
 
 # --- Helpers ---
-def generate_new_keys(count, days):
+def generate_new_keys(count, days, key_type):
     data = load_data()
     expiry = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
     created_keys = []
@@ -131,7 +173,7 @@ def generate_new_keys(count, days):
             "key": key_str,
             "expiry_date": expiry,
             "hwid": None,
-            "type": "standard"
+            "type": key_type
         })
         created_keys.append(key_str)
     
@@ -143,6 +185,129 @@ def send_telegram(chat_id, text):
         f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
         json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     )
+
+def send_telegram_with_keyboard(chat_id, text, keyboard):
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        json={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": keyboard,
+        },
+    )
+
+def answer_callback(callback_id):
+    if not callback_id:
+        return
+    requests.post(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery",
+        json={"callback_query_id": callback_id},
+    )
+
+def send_main_menu(chat_id):
+    text = (
+        "🤖 <b>ST FAMILY Control Panel</b>\n\n"
+        "اختر خيارًا من القائمة:"
+    )
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "🔑 Generate Keys", "callback_data": "menu_generate"},
+                {"text": "🌍 Global Keys", "callback_data": "menu_global"},
+            ],
+            [
+                {"text": "⚙️ Control Server", "callback_data": "menu_control"},
+                {"text": "📊 Status", "callback_data": "menu_stats"},
+            ],
+        ]
+    }
+    send_telegram_with_keyboard(chat_id, text, keyboard)
+
+def send_generate_menu(chat_id):
+    text = "🔑 <b>Generate Standard Keys</b>"
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "1 Key • 7 Days", "callback_data": "gen_1_7"},
+                {"text": "1 Key • 30 Days", "callback_data": "gen_1_30"},
+            ],
+            [
+                {"text": "5 Keys • 30 Days", "callback_data": "gen_5_30"},
+                {"text": "10 Keys • 30 Days", "callback_data": "gen_10_30"},
+            ],
+            [
+                {"text": "⬅️ Back", "callback_data": "menu_main"},
+            ],
+        ]
+    }
+    send_telegram_with_keyboard(chat_id, text, keyboard)
+
+def send_global_menu(chat_id):
+    text = "🌍 <b>Global Keys (Unlimited Devices)</b>"
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": "Global • 1 Day", "callback_data": "global_1"},
+                {"text": "Global • 7 Days", "callback_data": "global_7"},
+            ],
+            [
+                {"text": "Global • 30 Days", "callback_data": "global_30"},
+            ],
+            [
+                {"text": "⬅️ Back", "callback_data": "menu_main"},
+            ],
+        ]
+    }
+    send_telegram_with_keyboard(chat_id, text, keyboard)
+
+def send_control_menu(chat_id):
+    data = load_data()
+    settings = data.get("settings", {})
+    server = settings.get("server_enabled", True)
+    validation = settings.get("key_validation_enabled", True)
+    creation = settings.get("key_creation_enabled", True)
+
+    text = "⚙️ <b>Server Controls</b>"
+    keyboard = {
+        "inline_keyboard": [
+            [
+                {"text": f"{'🟢' if server else '🔴'} Server", "callback_data": "toggle_server"},
+                {"text": f"{'🟢' if validation else '🔴'} Validation", "callback_data": "toggle_validation"},
+            ],
+            [
+                {"text": f"{'🟢' if creation else '🔴'} Creation", "callback_data": "toggle_creation"},
+            ],
+            [
+                {"text": "⬅️ Back", "callback_data": "menu_main"},
+            ],
+        ]
+    }
+    send_telegram_with_keyboard(chat_id, text, keyboard)
+
+def toggle_setting(chat_id, key, label):
+    data = load_data()
+    settings = data.get("settings", {})
+    current = settings.get(key, True)
+    settings[key] = not current
+    data["settings"] = settings
+    save_data(data)
+    status = "Enabled" if settings[key] else "Disabled"
+    send_telegram(chat_id, f"{label} ➜ <b>{status}</b>")
+    send_control_menu(chat_id)
+
+def send_status(chat_id):
+    data = load_data()
+    total = len(data.get("keys", []))
+    settings = data.get("settings", {})
+    text = (
+        "📊 <b>Status</b>\n\n"
+        f"Total Keys: {total}\n"
+        f"Server: {'🟢' if settings.get('server_enabled', True) else '🔴'}\n"
+        f"Validation: {'🟢' if settings.get('key_validation_enabled', True) else '🔴'}\n"
+        f"Creation: {'🟢' if settings.get('key_creation_enabled', True) else '🔴'}"
+    )
+    send_telegram(chat_id, text)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
