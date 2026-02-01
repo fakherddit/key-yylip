@@ -29,7 +29,15 @@ GLOBAL_KEY_REGEX = re.compile(r"^GLB-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$", re.I
 
 
 def get_db_connection():
-    conn = psycopg2.connect(DB_URL)
+    # Force SSL mode in the connection string if not present
+    db_url = DB_URL
+    if 'sslmode' not in db_url:
+        if '?' in db_url:
+            db_url += '&sslmode=require'
+        else:
+            db_url += '?sslmode=require'
+            
+    conn = psycopg2.connect(db_url)
     conn.autocommit = True
     return conn
 
