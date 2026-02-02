@@ -26,6 +26,12 @@ if ($callback_query) {
     if (strpos($data, 'gen_') === 0) {
         list($action, $count, $days) = explode('_', $data);
         generateKeys($chat_id, $count, $days, $telegram_token, $conn);
+    } elseif (strpos($data, 'ban_') === 0) {
+        $key = substr($data, 4);
+        banKey($chat_id, $key, $telegram_token, $conn);
+    } elseif (strpos($data, 'reset_') === 0) {
+        $key = substr($data, 6);
+        resetKey($chat_id, $key, $telegram_token, $conn);
     }
     
     answerCallbackQuery($callback_query['id'], $telegram_token);
@@ -44,30 +50,25 @@ if ($message) {
         exit();
     }
     
-    switch ($text) {
-        case '/start':
-            sendMainMenu($chat_id, $telegram_token);
-            break;
-            
-        case '/generate':
-            sendGenerateMenu($chat_id, $telegram_token);
-            break;
-            
-        case '/stats':
-            sendStats($chat_id, $telegram_token, $conn);
-            break;
-            
-        case '/list':
-            listActiveKeys($chat_id, $telegram_token, $conn);
-            break;
-            
-        default:
-            // Check if it's a key lookup
-            if (preg_match('/^[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i', $text)) {
-                lookupKey($chat_id, $text, $telegram_token, $conn);
-            } else {
-                sendMessage($chat_id, "❌ Unknown command. Use /start to see available commands.", $telegram_token);
-            }
+    // Command routing
+    if (strpos($text, '/start') === 0) {
+        sendMainMenu($chat_id, $telegram_token);
+    } elseif (strpos($text, '/generate') === 0) {
+        sendGenerateMenu($chat_id, $telegram_token);
+    } elseif (strpos($text, '/stats') === 0) {
+        sendStats($chat_id, $telegram_token, $conn);
+    } elseif (strpos($text, '/list') === 0) {
+        listActiveKeys($chat_id, $telegram_token, $conn);
+    } elseif (strpos($text, '/ban ') === 0) {
+        $key = trim(substr($text, 5));
+        banKey($chat_id, $key, $telegram_token, $conn);
+    } elseif (strpos($text, '/reset ') === 0) {
+        $key = trim(substr($text, 7));
+        resetKey($chat_id, $key, $telegram_token, $conn);
+    } elseif (preg_match('/^[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/i', trim($text))) {
+        lookupKey($chat_id, trim($text), $telegram_token, $conn);
+    } else {
+        sendMessage($chat_id, "❌ Unknown command. Send a key to manage it or use /start.", $telegram_token);
     }
 }
 
@@ -97,7 +98,9 @@ function sendMainMenu($chat_id, $token) {
     $text .= "/generate - Generate new license keys\n";
     $text .= "/stats - View statistics\n";
     $text .= "/list - List active keys\n";
-    $text .= "\nSend a key to lookup its details.";
+    $text .= "/ban KEY - Ban a specific key\n";
+    $text .= "/reset KEY - Reset HWID for a key\n";
+    $text .= "\n<b>Pro Tip:</b> Send any key to view options for it!";
     
     sendMessage($chat_id, $text, $token);
 }
@@ -205,12 +208,44 @@ function lookupKey($chat_id, $key, $token, $conn) {
         $text .= "Created: " . date('Y-m-d H:i', strtotime($row['created_at'])) . "\n";
         $text .= "Expires: " . date('Y-m-d H:i', strtotime($row['expiry_date'])) . "\n";
         $text .= "Last Used: " . ($row['last_used'] ? date('Y-m-d H:i', strtotime($row['last_used'])) : 'Never') . "\n";
+        
+        $keyboard = [
+            'inline_keyboard' => [
+                [
+                    ['text' => '🚫 Ban Key', 'callback_data' => 'ban_' . $row['license_key']],
+                    ['text' => '🔄 Reset HWID', 'callback_data' => 'reset_' . $row['license_key']]
+                ]
+            ]
+        ];
+        sendMessage($chat_id, $text, $token, $keyboard);
     } else {
         $text = "❌ Key not found in database";
+        sendMessage($chat_id, $text, $token);
     }
     
     $stmt->close();
-    sendMessage($chat_id, $text, $token);
+}
+
+function banKey($chat_id, $key, $token, $conn) {
+    $stmt = $conn->prepare("UPDATE licenses SET status = 'banned' WHERE license_key = ?");
+    $stmt->bind_param("s", $key);
+    if ($stmt->execute()) {
+        sendMessage($chat_id, "🚫 Key <code>$key</code> has been BANNED.", $token);
+    } else {
+        sendMessage($chat_id, "❌ Failed to ban key.", $token);
+    }
+    $stmt->close();
+}
+
+function resetKey($chat_id, $key, $token, $conn) {
+    $stmt = $conn->prepare("UPDATE licenses SET hwid = NULL WHERE license_key = ?");
+    $stmt->bind_param("s", $key);
+    if ($stmt->execute()) {
+        sendMessage($chat_id, "🔄 HWID for key <code>$key</code> has been RESET.", $token);
+    } else {
+        sendMessage($chat_id, "❌ Failed to reset key.", $token);
+    }
+    $stmt->close();
 }
 
 function answerCallbackQuery($callback_id, $token) {
