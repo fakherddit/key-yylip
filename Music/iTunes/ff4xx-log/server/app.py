@@ -4,13 +4,19 @@ import json
 import random
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
+import time
+from functools import wraps
 
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 import requests
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
+
+# Connection pool to prevent blocking
+db_pool = None
 
 DEFAULT_DB_URL = (
     "postgresql://dylip_key_user:TwbqpTuAggFaAXhIX7Q7pMmJIih5vEQe@"
@@ -29,17 +35,32 @@ GLOBAL_KEY_REGEX = re.compile(r"^GLB-[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$", re.I
 
 
 def get_db_connection():
-    # Force SSL mode in the connection string if not present
-    db_url = DB_URL
-    if 'sslmode' not in db_url:
-        if '?' in db_url:
-            db_url += '&sslmode=require'
-        else:
-            db_url += '?sslmode=require'
-            
-    conn = psycopg2.connect(db_url)
-    conn.autocommit = True
-    return conn
+    """Get database connection with SSL fallback"""
+    try:
+        # Try with prefer SSL (most compatible)
+        conn = psycopg2.connect(DB_URL, sslmode='prefer', connect_timeout=10)
+        conn.autocommit = True
+        return conn
+    except Exception as e:
+        print(f"[DB] Connection attempt 1 failed: {e}")
+        try:
+            # Try without SSL
+            conn = psycopg2.connect(DB_URL, connect_timeout=10)
+            conn.autocommit = True
+            return conn
+        except Exception as e2:
+            print(f"[DB] Connection attempt 2 failed: {e2}")
+            # Try with allow SSL
+            conn = psycopg2.connect(DB_URL, sslmode='allow', connect_timeout=10)
+            conn.autocommit = True
+            return conn
+
+def return_db_connection(conn):
+    """Close database connection"""
+    try:
+        conn.close()
+    except:
+        pass
 
 
 def get_status(conn, key):
@@ -56,12 +77,14 @@ def check_server_enabled():
     path = request.path
     if path in ("/health", "/telegram-webhook"):
         return None
-    conn = get_db_connection()
+    conn = None
     try:
+        conn = get_db_connection()
         if not get_status(conn, "server_enabled"):
             return jsonify({"error": "Server temporarily disabled by admin"}), 503
     finally:
-        conn.close()
+        if conn:
+            return_db_connection(conn)
     return None
 
 
@@ -73,6 +96,7 @@ def health():
 
 @app.post("/validate")
 def validate_key():
+    start_time = time.time()
     payload = request.get_json(silent=True) or {}
     key = payload.get("key", "").strip()
     hwid = payload.get("hwid", "").strip()
@@ -80,8 +104,9 @@ def validate_key():
     if not key or not hwid:
         return jsonify({"valid": False, "message": "Invalid request: Missing key or HWID"})
 
-    conn = get_db_connection()
+    conn = None
     try:
+        conn = get_db_connection()
         if not get_status(conn, "key_validation_enabled"):
             return jsonify({"valid": False, "message": "Key validation temporarily disabled"})
 
@@ -122,6 +147,9 @@ def validate_key():
                     (key,),
                 )
 
+        elapsed = time.time() - start_time
+        print(f"[VALIDATE] Key validated in {elapsed:.2f}s")
+        
         return jsonify(
             {
                 "valid": True,
@@ -129,8 +157,12 @@ def validate_key():
                 "expiry_date": row.get("expiry_date"),
             }
         )
+    except Exception as e:
+        print(f"[ERROR] Validation failed: {str(e)}")
+        return jsonify({"valid": False, "message": "Server error"}), 500
     finally:
-        conn.close()
+        if conn:
+            return_db_connection(conn)
 
 
 @app.get("/generate")
@@ -138,8 +170,9 @@ def generate_api():
     count = max(1, int(request.args.get("count", 1)))
     days = max(1, int(request.args.get("days", 30)))
 
-    conn = get_db_connection()
+    conn = None
     try:
+        conn = get_db_connection()
         if not get_status(conn, "key_creation_enabled"):
             return jsonify({"success": False, "message": "Key creation disabled"}), 403
 
@@ -160,8 +193,12 @@ def generate_api():
                 keys.append({"key": key, "expiry_date": expiry.isoformat()})
 
         return jsonify({"success": True, "message": f"{len(keys)} keys generated", "keys": keys})
+    except Exception as e:
+        print(f"[ERROR] Generate failed: {str(e)}")
+        return jsonify({"success": False, "message": "Server error"}), 500
     finally:
-        conn.close()
+        if conn:
+            return_db_connection(conn)
 
 
 @app.post("/telegram-webhook")
@@ -173,8 +210,9 @@ def telegram_webhook():
     message = update.get("message")
     callback_query = update.get("callback_query")
 
-    conn = get_db_connection()
+    conn = None
     try:
+        conn = get_db_connection()
         if callback_query:
             chat_id = callback_query["message"]["chat"]["id"]
             data = callback_query.get("data", "")
@@ -222,8 +260,12 @@ def telegram_webhook():
                 lookup_key(chat_id, text, conn)
 
         return "", 200
+    except Exception as e:
+        print(f"[ERROR] Webhook failed: {str(e)}")
+        return "", 200
     finally:
-        conn.close()
+        if conn:
+            return_db_connection(conn)
 
 
 # Telegram helpers
