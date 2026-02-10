@@ -61,7 +61,17 @@ def return_db_connection(conn):
         conn.close()
     except:
         pass
-
+def get_status(conn, key):
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM server_settings WHERE key = %s LIMIT 1", (key,))
+            row = cur.fetchone()
+        if not row:
+            return True
+        return str(row[0]) == "1"  # Fix: use row[0] not row[1]
+    except Exception as e:
+        print(f"[ERROR] get_status: {e}")
+        return True
 
 def get_status(conn, key):
     with conn.cursor() as cur:
