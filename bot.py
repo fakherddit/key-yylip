@@ -2134,6 +2134,28 @@ def main():
 
 
 if __name__ == "__main__":
-  main()
+    try:
+        from flask import Flask
+        from threading import Thread
+        import os
+
+        # Keep-alive server for deployment platforms
+        app = Flask('')
+
+        @app.route('/')
+        def home():
+            return "Bot is alive!"
+
+        def run():
+            port = int(os.environ.get("PORT", 8080))
+            app.run(host='0.0.0.0', port=port)
+
+        keep_alive_thread = Thread(target=run)
+        keep_alive_thread.daemon = True
+        keep_alive_thread.start()
+    except ImportError:
+        print("Flask not installed, skipping keep-alive server.")
+    
+    main()
 
 
