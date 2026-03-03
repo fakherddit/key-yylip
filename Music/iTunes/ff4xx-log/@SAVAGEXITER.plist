@@ -7,6 +7,8 @@
 		<key>Bundles</key>
 		<array>
 			<string>com.garena.game.kgvn</string>
+			<string>com.dts.kyo</string>
+			<string>com.fluck.org99</string>
 		</array>
 	</dict>
 </dict>

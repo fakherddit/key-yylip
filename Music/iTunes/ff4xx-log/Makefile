@@ -1,26 +1,23 @@
-export CC = ccache gcc
-export CXX = ccache g++
-ARCHS = arm64
-DEBUG = 0
-FINALPACKAGE = 1
-FOR_RELEASE = 1
-THEOS_PACKAGE_SCHEME = rootless
-THEOS_LEAN_AND_MEAN = 1
-THEOS_NO_DEFAULTS = 1
+export THEOS=/home/fakherddin/theos
+export TARGET=iphone:clang:16.5:9.0
+export ARCHS=arm64
 
-THEOS_MAKE_PATH ?= $(THEOS)/makefiles
+TWEAK_NAME = SavageProtection
 
-TWEAK_NAME = @SAVAGEXITER
-$(TWEAK_NAME)_CCFLAGS = -std=c++17 -fno-rtti -DNDEBUG -Wall -Wno-deprecated-declarations -Wno-unused-variable -Wno-unused-value -Wno-unused-function -fvisibility=hidden
-$(TWEAK_NAME)_CFLAGS = -fobjc-arc -Wall -Wno-deprecated-declarations -Wno-unused-variable -Wno-unused-value -Wno-unused-function -fvisibility=hidden
+# REMOVED protection.mm to isolate crash
+# ErzoBypass.mm caused crashes because offsets are version-dependent.
+# FIXED BYPASS: Included protection.mm (Antiban) but disabled Helper verification
+# REMOVED protection.mm AGAIN - Crash 0.0001s
+SavageProtection_FILES = savagexiter.mm $(wildcard Esp/*.mm) $(wildcard Esp/*.m) $(wildcard IMGUI/*.cpp) $(wildcard IMGUI/*.mm)
 
-ifeq ($(IGNORE_WARNINGS),1)
-  $(TWEAK_NAME)_CFLAGS += -w
-  $(TWEAK_NAME)_CCFLAGS += -w
-endif
-$(TWEAK_NAME)_FRAMEWORKS =  UIKit Foundation Security QuartzCore CoreGraphics CoreText  AVFoundation Accelerate GLKit SystemConfiguration GameController Metal MetalKit
-$(TWEAK_NAME)_LDFLAGS += JRMemory.framework/JRMemory 
-$(TWEAK_NAME)_FILES = savagexiter.mm $(wildcard Esp/*.mm) $(wildcard Esp/*.m) $(wildcard IMGUI/*.cpp) $(wildcard IMGUI/*.mm) $(wildcard hook/*.c)
+# Use strict flags but allow C++17
+SavageProtection_CFLAGS = -fobjc-arc -Wno-error -Wno-unused-variable -Wno-unused-function -O3 -fvisibility=hidden
+SavageProtection_CCFLAGS = -std=c++17 -fno-rtti -fvisibility=hidden -DNDEBUG
+SavageProtection_FRAMEWORKS = UIKit Foundation CoreGraphics QuartzCore Metal MetalKit
+SavageProtection_LIBRARIES = substrate
+# Merge JRMemory STATICALLY so we only have ONE dylib file
+SavageProtection_LDFLAGS = -F.
+# SavageProtection_LDFLAGS += -force_load JRMemory.framework/JRMemory
 
 include $(THEOS)/makefiles/common.mk
 include $(THEOS)/makefiles/tweak.mk

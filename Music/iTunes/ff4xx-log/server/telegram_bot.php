@@ -201,14 +201,51 @@ function lookupKey($chat_id, $key, $token, $conn) {
     
     if ($result->num_rows > 0) {
         $row = $result->fetch_assoc();
-        $text = "🔍 <b>Key Details</b>\n\n";
-        $text .= "Key: <code>{$row['license_key']}</code>\n";
-        $text .= "Status: " . ($row['status'] == 'active' ? '✅ Active' : '❌ ' . ucfirst($row['status'])) . "\n";
-        $text .= "HWID: " . ($row['hwid'] ?: '⚪ Not bound') . "\n";
-        $text .= "Created: " . date('Y-m-d H:i', strtotime($row['created_at'])) . "\n";
-        $text .= "Expires: " . date('Y-m-d H:i', strtotime($row['expiry_date'])) . "\n";
-        $text .= "Last Used: " . ($row['last_used'] ? date('Y-m-d H:i', strtotime($row['last_used'])) : 'Never') . "\n";
         
+        // Calculate remaining time
+        $expiry = new DateTime($row['expiry_date']);
+        $now = new DateTime();
+        $interval = $now->diff($expiry);
+        $remaining = $interval->invert ? "Expired" : $interval->format('%a Days, %h Hours');
+        
+        // Determine usage status
+        $usage_status = $row['hwid'] ? "🔴 Bound to Device" : "🟢 Available (Unused)";
+        
+        $text = "🔍 <b>FULL KEY INFORMATION</b>\n";
+        $text .= "━━━━━━━━━━━━━━━━━━━━\n";
+        $text .= "🔑 <b>Key:</b> <code>{$row['license_key']}</code>\n";
+        $text .= "📊 <b>Status:</b> " . ($row['status'] == 'active' ? '✅ Active' : '❌ ' . ucfirst($row['status'])) . "\n";
+        $text .= "🏷 <b>Type:</b> " . ucfirst($row['key_type'] ?? 'Standard') . "\n";
+        $text .= "------------------------------------\n";
+        $text .= "📱 <b>Device Info (HWID):</b>\n";
+        $text .= "<code>" . ($row['hwid'] ?: 'Not bound yet') . "</code>\n";
+        $text .= "👥 <b>Usage:</b> $usage_status\n";
+        $text .= "------------------------------------\n";
+        $text .= "📅 <b>Dates:</b>\n";
+        $text .= "• Created: " . date('M d, Y H:i', strtotime($row['created_at'])) . "\n";
+        $text .= "• Expires: " . date('M d, Y H:i', strtotime($row['expiry_date'])) . "\n";
+        $text .= "• Last Login: " . ($row['last_used'] ? date('M d, Y H:i', strtotime($row['last_used'])) : 'Never') . "\n";
+        $text .= "⏳ <b>Time Left:</b> $remaining\n";
+        
+        if (!empty($row['notes'])) {
+             $text .= "📝 <b>Notes:</b> {$row['notes']}\n";
+        }
+        $text .= "━━━━━━━━━━━━━━━━━━━━";
+        
+        $keyboard = [
+            'inline_keyboard' => [
+                [
+                    ['text' => '🚫 Ban Key', 'callback_data' => 'ban_' . $row['license_key']],
+                    ['text' => '🔄 Reset HWID', 'callback_data' => 'reset_' . $row['license_key']]
+                ],
+                [
+                    ['text' => '🗑 Delete Key', 'callback_data' => 'del_' . $row['license_key']], // Added Delete Option if needed, though not requested, but useful. Wait, user said "MAXIMUIM".
+                    ['text' => '➕ Add Note', 'callback_data' => 'note_' . $row['license_key']]  // Placeholder for note feature or just extra info
+                ]
+            ]
+        ];
+        
+        // Simplify keyboard to requested features first to minimize errors if handler not present
         $keyboard = [
             'inline_keyboard' => [
                 [
@@ -217,9 +254,11 @@ function lookupKey($chat_id, $key, $token, $conn) {
                 ]
             ]
         ];
+        
         sendMessage($chat_id, $text, $token, $keyboard);
     } else {
-        $text = "❌ Key not found in database";
+        $text = "❌ <b>Key Not Found</b>\n";
+        $text .= "The key <code>$key</code> does not exist in the database.";
         sendMessage($chat_id, $text, $token);
     }
     

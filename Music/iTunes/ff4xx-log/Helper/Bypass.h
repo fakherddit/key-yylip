@@ -2,6 +2,9 @@
 #include <vector>
 #include <string>
 #include <mach/mach.h>
+#include <libkern/OSCacheControl.h>
+#include <Foundation/Foundation.h>
+#include <dlfcn.h>
 #include "Mem.h"
 
 struct PatchData {
@@ -10,7 +13,7 @@ struct PatchData {
 };
 
 // ERZO X BOLT Offsets
-PatchData bypassPatches[] = {
+static PatchData bypassPatches[] = {
     {0x4947BF0, "200080D2C0035FD6"},
     {0x2E2ABAC, "C0035FD6"},
     {0x52C03D4, "00D0201EC0035FD6"},
@@ -120,14 +123,14 @@ PatchData bypassPatches[] = {
     {0x2D50310, "C0035FD6"}
 };
 
-uint8_t HexDigit(char c) {
+static inline uint8_t HexDigit(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     return 0;
 }
 
-void WritePatch(uint64_t offset, const char* hexBytes) {
+static inline bool WritePatch(uint64_t offset, const char* hexBytes) {
     size_t len = strlen(hexBytes);
     size_t byteLen = len / 2;
     uint8_t* bytes = new uint8_t[byteLen];
@@ -140,7 +143,7 @@ void WritePatch(uint64_t offset, const char* hexBytes) {
     uintptr_t address = getRealOffset(offset);
     if (!address) {
         delete[] bytes;
-        return;
+        return false;
     }
 
     kern_return_t err;
@@ -148,19 +151,123 @@ void WritePatch(uint64_t offset, const char* hexBytes) {
     
     // Unlock memory
     err = vm_protect(port, (mach_vm_address_t)address, byteLen, false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
-    if (err == KERN_SUCCESS) {
-        // Write bytes
-        vm_write(port, (mach_vm_address_t)address, (vm_offset_t)bytes, byteLen);
-        
-        // Restore permissions
-        vm_protect(port, (mach_vm_address_t)address, byteLen, false, VM_PROT_READ | VM_PROT_EXECUTE);
+    if (err != KERN_SUCCESS) {
+        delete[] bytes;
+        return false;
     }
     
+    // Write bytes directly with memcpy (faster than vm_write)
+    memcpy((void*)address, bytes, byteLen);
+    
+    // Flush cache
+    sys_dcache_flush((void*)address, byteLen);
+    sys_icache_invalidate((void*)address, byteLen);
+    
+    // Restore permissions
+    err = vm_protect(port, (mach_vm_address_t)address, byteLen, false, VM_PROT_READ | VM_PROT_EXECUTE);
+    
     delete[] bytes;
+    return true;
 }
 
-void ApplyErzoBypass() {
+static inline void ApplyErzoBypass() {
+    // Silent application of patches
+    int successCount = 0;
+    
+    // Apply all 95 patches
     for (const auto& patch : bypassPatches) {
-        WritePatch(patch.offset, patch.hexCode);
+        if (WritePatch(patch.offset, patch.hexCode)) {
+            successCount++;
+        }
     }
+}
+
+// --- NEW STRING CLEANER BYPASS ---
+// Scans memory for report/ban strings and corrupts them
+// This prevents the game from constructing valid ban reports
+
+static inline void NukeString(uint64_t startAddr, size_t range, const char* target) {
+    size_t targetLen = strlen(target);
+    if (targetLen == 0) return;
+    
+    // Chunk size to prevent long freezes
+    const size_t CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+    uint8_t* start = (uint8_t*)startAddr;
+    
+    for (size_t offset = 0; offset < range; offset += CHUNK_SIZE) {
+        size_t currentChunk = (offset + CHUNK_SIZE < range) ? CHUNK_SIZE : (range - offset);
+        uint8_t* chunkStart = start + offset;
+        uint8_t* chunkEnd = chunkStart + currentChunk - targetLen;
+        
+        // Ensure memory is valid before scanning
+        vm_address_t regionAddr = (vm_address_t)chunkStart;
+        vm_size_t regionSize;
+        vm_region_basic_info_data_64_t info;
+        mach_msg_type_number_t infoCount = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t object_name;
+        
+        kern_return_t kr = vm_region_64(mach_task_self(), &regionAddr, &regionSize, 
+                                        VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, 
+                                        &infoCount, &object_name);
+                                        
+        if (kr != KERN_SUCCESS) continue;
+        
+        // Scan within this chunk
+        for (uint8_t* p = chunkStart; p < chunkEnd; p++) {
+            if (p[0] == target[0] && memcmp(p, target, targetLen) == 0) {
+                // Found string - Nuke it safely
+                vm_protect(mach_task_self(), (vm_address_t)p, targetLen, false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+                memset(p, 0, targetLen); 
+                vm_protect(mach_task_self(), (vm_address_t)p, targetLen, false, VM_PROT_READ | VM_PROT_EXECUTE);
+                usleep(100); // Tiny sleep after write
+            }
+        }
+        usleep(500); // Sleep between chunks to prevent watchdog kill
+    }
+}
+
+// --- SAFER STRING CLEANER ---
+static inline void ApplyStringCleaner() {
+    // Get main binary header
+    const struct mach_header_64* header = (const struct mach_header_64*)_dyld_get_image_header(0);
+    // uint64_t slide = _dyld_get_image_vmaddr_slide(0);
+    
+    // Calculate actual size from segments to avoid crashes
+    uint64_t startAddr = (uint64_t)header;
+    uint64_t totalSize = 0;
+    
+    // Iterate load commands to find __TEXT segment size
+    const struct load_command* cmd = (const struct load_command*)(header + 1);
+    for (uint32_t i = 0; i < header->ncmds; i++) {
+        if (cmd->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64* seg = (const struct segment_command_64*)cmd;
+            if (strcmp(seg->segname, "__TEXT") == 0) {
+                totalSize = seg->vmsize;
+                break;
+            }
+        }
+        cmd = (const struct load_command*)((uintptr_t)cmd + cmd->cmdsize);
+    }
+
+    if (totalSize == 0) totalSize = 0x4000000; // Fallback to 64MB if parsing fails
+    
+    // Strings to sanitize
+    const char* targets[] = {
+        "ReportPlayer",
+        "BanAccount",
+        "CheatDetected", 
+        "UploadLog"
+    };
+    
+    for (const char* target : targets) {
+        // Use a safer search (chunked) to avoid freezing threads
+        NukeString(startAddr, totalSize, target);
+    }
+}
+
+// --- REMOVED AGGRESSIVE HIDER (CAUSED CRASHES) ---
+static inline void HideDylib() {
+    // Disabled for stability
+    // memset header causes EXC_BAD_ACCESS during dyld calls
+    return;
 }

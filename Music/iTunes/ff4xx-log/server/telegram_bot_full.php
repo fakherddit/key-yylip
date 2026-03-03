@@ -15,6 +15,13 @@ $callback_query = $update['callback_query'] ?? null;
 if ($callback_query) {
     $chat_id = $callback_query['message']['chat']['id'];
     $data = $callback_query['data'];
+    $user_id = $callback_query['from']['id'];
+
+    if ($user_id != $admin_chat_id) {
+        sendMessage($chat_id, "⛔ Unauthorized", $telegram_token);
+        answerCallbackQuery($callback_query['id'], $telegram_token);
+        exit();
+    }
     
     if (strpos($data, 'gen_') === 0) {
         list($action, $count, $days) = explode('_', $data);
@@ -75,12 +82,14 @@ function sendMessage($chat_id, $text, $token, $reply_markup = null) {
 }
 
 function sendMainMenu($chat_id, $token) {
-    $text = "🎮 <b>ST FAMILY License Bot</b>\n\n";
-    $text .= "/generate - Standard keys\n";
-    $text .= "/global - Global keys (unlimited users)\n";
-    $text .= "/control - Server controls\n";
-    $text .= "/stats - Statistics\n";
-    $text .= "/list - List keys";
+    $text = "🤖 <b>ST FAMILY Control Panel</b>\n\n";
+    $text .= "اختر خياراً من القائمة:\n";
+    $text .= "\n";
+    $text .= "🔑 /generate - Standard keys\n";
+    $text .= "🌍 /global - Global keys\n";
+    $text .= "⚙️ /control - Server controls\n";
+    $text .= "📊 /stats - Statistics\n";
+    $text .= "📋 /list - List keys";
     sendMessage($chat_id, $text, $token);
 }
 

@@ -664,7 +664,7 @@ bool operator!=(const Quaternion lhs, const Quaternion rhs)
     return !(lhs == rhs);
 }
 
-std::string to_string(Quaternion a) {
+inline std::string to_string(Quaternion a) {
     return to_string(a.x) + std::string(", ") + to_string(a.y) + std::string(", ") + to_string(a.z) + std::string(", ") + to_string(a.w);
 }
 

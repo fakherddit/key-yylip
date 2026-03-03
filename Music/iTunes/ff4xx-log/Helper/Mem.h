@@ -1,3 +1,4 @@
+#pragma once
 #include <substrate.h>
 #include <mach-o/dyld.h>
 #include <Foundation/Foundation.h>
@@ -21,7 +22,7 @@
 // Convert hex color to UIColor, usage: For the color #BD0000 you'd use: UIColorFromHex(0xBD0000)
 #define UIColorFromHex(hexColor) [UIColor colorWithRed:((float)((hexColor & 0xFF0000) >> 16))/255.0 green:((float)((hexColor & 0xFF00) >> 8))/255.0 blue:((float)(hexColor & 0xFF))/255.0 alpha:1.0]
 
-bool getType(unsigned int data) {
+static inline bool getType(unsigned int data) {
     int a = data & 0xffff8000;
     int b = a + 0x00008000;
     int c = b & 0xffff7fff;
@@ -36,8 +37,8 @@ struct MemoryFileInfo {
     long long address;
 };
 
-MemoryFileInfo getBaseInfo() {
-    MemoryFileInfo _info;
+static inline MemoryFileInfo getBaseInfo() {
+    MemoryFileInfo _info = {0}; // Initialize to zero to prevent crash
     std::string applicationsPath = "/private/var/containers/Bundle/Application";
     for (uint32_t i = 0; i < _dyld_image_count(); i++)
     {
@@ -56,7 +57,7 @@ MemoryFileInfo getBaseInfo() {
     return _info;
 }
 
-MemoryFileInfo getMemoryFileInfo(const std::string& fileName) {
+static inline MemoryFileInfo getMemoryFileInfo(const std::string& fileName) {
     MemoryFileInfo _info;
     const uint32_t imageCount = _dyld_image_count();
     for (uint32_t i = 0; i < imageCount; i++) {
@@ -75,7 +76,7 @@ MemoryFileInfo getMemoryFileInfo(const std::string& fileName) {
     return _info;
 }
 
-uintptr_t getAbsoluteAddress(const char *fileName, uintptr_t address) {
+static inline uintptr_t getAbsoluteAddress(const char *fileName, uintptr_t address) {
     MemoryFileInfo info;
     if (fileName)
         info = getMemoryFileInfo(fileName);
@@ -86,16 +87,16 @@ uintptr_t getAbsoluteAddress(const char *fileName, uintptr_t address) {
     return info.address + address;
 }
 
-uint64_t getRealOffset(uint64_t offset){
+static inline uint64_t getRealOffset(uint64_t offset){
     return getAbsoluteAddress(NULL, offset);
 }
 
-uint64_t getRealOffsetNULL(uint64_t offset){
+static inline uint64_t getRealOffsetNULL(uint64_t offset){
     return getAbsoluteAddress(NULL, offset);
 }
 
 //Well, at here I use vm_unity for the game that contains "UnityFramework.framework/UnityFramework" file, you can change it if needed, for example: LoL WildRift, FEProj is the correct binary for you.
-bool vm_unity(long long offset, unsigned int data) {
+static inline bool vm_unity(long long offset, unsigned int data) {
     //Change binary name here if it not UnityFramework
     const char *fileName = "UnityFramework";
     uintptr_t address = getAbsoluteAddress(fileName, offset);
@@ -131,7 +132,7 @@ bool vm_unity(long long offset, unsigned int data) {
     return true;
 }
 
-bool vm(long long offset, unsigned int data) {
+static inline bool vm(long long offset, unsigned int data) {
     //Change binary name here if it not UnityFramework
     const char *fileName = NULL;
     uintptr_t address = getAbsoluteAddress(fileName, offset);
@@ -168,7 +169,7 @@ bool vm(long long offset, unsigned int data) {
 }
 
 
-bool vm_anogs(long long offset, unsigned int data) {
+static inline bool vm_anogs(long long offset, unsigned int data) {
     //Change binary name here if it not UnityFramework
     const char *fileName = "anogs";
     uintptr_t address = getAbsoluteAddress(fileName, offset);

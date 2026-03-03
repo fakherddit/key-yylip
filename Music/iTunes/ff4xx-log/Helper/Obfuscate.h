@@ -1,3 +1,4 @@
+#pragma once
 // http://www.rohitab.com/discuss/topic/39611-malware-related-compile-time-hacks-with-c11/
 // https://github.com/Rednick16/cpp11-compile-time-string-obfuscation
 

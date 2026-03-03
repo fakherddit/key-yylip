@@ -389,7 +389,7 @@ def main():
             self.end_headers()
             self.wfile.write(b"Bot is online and healthy!")
     def run_dummy_server():
-        server_address = ('', int(os.environ.get('PORT', 8000)))
+        server_address = ('0.0.0.0', int(os.environ.get('PORT', 8000)))
         httpd = HTTPServer(server_address, DummyHandler)
         httpd.serve_forever()
     threading.Thread(target=run_dummy_server, daemon=True).start()

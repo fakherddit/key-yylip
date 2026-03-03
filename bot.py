@@ -1,6 +1,34 @@
+import os
+from flask import Flask
+from threading import Thread
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is running on Koyeb!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
+
+Thread(target=run_web).start()
+
+import json
+import os
+import time
+import hmac
+import hashlib
+import uuid
+import sqlite3
+import asyncio
+import sys
+import tempfile
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, InputFile
 import telegram
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+
 try:
   import requests
 except Exception:
@@ -171,12 +199,19 @@ def load_prices():
           "FREE": {"1": 3, "7": 7, "31": 13},
           "WIZARD": {"1": 3, "7": 7, "31": 13},
           "DRIP": {"1": 1, "7": 2, "15": 4, "31": 6},
-          "CERT_JIT_30": {"30": 3},
-          "FF_IOS_FLUORIT": {"1": 2, "7": 8, "31": 16},
+          "CERT_0": {"0": 3},
+          "CERT_30": {"30": 4},
+          "CERT_90": {"90": 5},
+          "CERT_180": {"180": 8},
+          "CERT_300": {"300": 10},
+          "CERT_300_IPAD": {"300": 4},
+          "CERT_JIT_0": {"0": 3},
+          "CERT_JIT_30": {"30": 4},
+          "FF_IOS_FLUORIT": {"1": 3, "7": 7, "31": 13},
           "FF_IOS_MUGIL_PRO": {"31": 10.5},
           "HG_CHEAT_ANDROID": {"1": 2, "10": 3, "30": 6},
           "DRIP_CLIENT_ROOT_DEVICE": {"1": 1, "7": 3, "30": 6},
-          "PATO_TEAM": {"3": 1, "7": 1.5, "15": 2.5, "30": 5}
+          "PATO_TEAM": {"3": 1, "7": 0.5, "15": 2.5, "30": 5}
       },
       "sellers": {}
   }
@@ -228,25 +263,19 @@ def load_prices():
               prices["global"][prod][str(dur)] = val
               changed = True
 
-  # Ensure unwanted certs are removed and prices are updated
-  keys_to_remove = ["CERT_0", "CERT_30", "CERT_90", "CERT_180", "CERT_300", "CERT_300_IPAD", "CERT_JIT_0"]
-  for k in keys_to_remove:
-      if k in prices.get("global", {}):
-          del prices["global"][k]
-          changed = True
-
-  # Update Fluorit prices if they don't match
-  fluorit_target = {"1": 2, "7": 8, "31": 16}
-  current_fluorit = prices.get("global", {}).get("FF_IOS_FLUORIT", {})
-  for dur, val in fluorit_target.items():
-      if str(current_fluorit.get(str(dur))) != str(val):
-          prices["global"].setdefault("FF_IOS_FLUORIT", {})[str(dur)] = val
-          changed = True
-
-  # Update Cert 30 price
-  if prices.get("global", {}).get("CERT_JIT_30", {}).get("30") != 3:
-      prices["global"].setdefault("CERT_JIT_30", {})["30"] = 3
-      changed = True
+  desired_month_prices = {
+      "FF_IOS_FLUORIT": {"31": 13},
+      "FF_IOS_MUGIL_PRO": {"31": 10.5},
+      "HG_CHEAT_ANDROID": {"1": 2, "10": 3, "30": 6},
+      "DRIP": {"31": 6},
+      "DRIP_CLIENT_ROOT_DEVICE": {"1": 1, "7": 3, "30": 6}
+  }
+  for prod, durs in desired_month_prices.items():
+      prices.setdefault("global", {}).setdefault(prod, {})
+      for dur, val in durs.items():
+          if str(prices["global"][prod].get(str(dur))) != str(val):
+              prices["global"][prod][str(dur)] = val
+              changed = True
 
   if "CERT" in prices.get("global", {}):
       prices["global"].pop("CERT", None)
@@ -271,7 +300,6 @@ def save_prices(prices):
 
 
 def get_price_for_user(prices, product, duration, user_id, data):
-  """Get price for a user, checking seller-specific prices first"""
   # Check if user is a seller and has custom pricing
   if user_id in data.get("sellers", {}):
       seller_prices = prices.get("sellers", {}).get(user_id, {})
@@ -314,19 +342,34 @@ def send_cert_keys_via_firstone(user_id: str, keys: list, signature: str):
       return False, str(e)
 
 
-def build_customer_activity_message(data: dict, uid: str):
+def build_customer_activity_message(data: dict, uid: str, username: str | None = None):
   balance = data.get("balances", {}).get(uid, 0)
   purchases = [s for s in data.get("sales_log", []) if s.get("user") == uid]
   total = len(purchases)
-  by_product = {}
+  by_item = {}
+  total_spent = 0
   for s in purchases:
       prod = s.get("product")
+      dur = s.get("duration")
+      price = s.get("price")
       if prod:
-          by_product[prod] = by_product.get(prod, 0) + 1
-  msg = f"📊 Your Activity:\n\nBalance: ${balance}\nPurchases: {total}\n\nPurchases by product:\n"
-  if by_product:
-      for p, c in by_product.items():
-          msg += f"- {p}: {c}\n"
+          key = (prod, str(dur) if dur is not None else "?")
+          by_item[key] = by_item.get(key, {"count": 0, "price": price})
+          by_item[key]["count"] += 1
+          by_item[key]["price"] = price
+          try:
+              total_spent += float(price)
+          except Exception:
+              pass
+  handle = f"@{username}" if username else "(no username)"
+  msg = f"📊 Your Activity:\nUser: {handle}\nID: {uid}\n\nBalance: ${balance}\nKeys bought: {total}\nTotal spent: ${total_spent}\n\nPurchases by product:\n"
+  if by_item:
+      for (prod, dur), info in by_item.items():
+          unit_price = info.get("price")
+          line = f"- {prod} | {dur} days | x{info.get('count', 0)}"
+          if unit_price is not None:
+              line += f" | ${unit_price} each"
+          msg += line + "\n"
   else:
       msg += "(no purchases yet)\n"
   return msg
@@ -542,7 +585,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
           [InlineKeyboardButton("🧾 جميع أرصدة اللاعبين", callback_data="admin_all_balances")],
           [InlineKeyboardButton("🗝️ سحب المفاتيح", callback_data="admin_withdraw_keys")],
           [InlineKeyboardButton("🗂️ جميع المفاتيح والعوائد", callback_data="admin_keys_revenue")],
-          [InlineKeyboardButton("📄 Full Report (TXT)", callback_data="admin_report")],
           [InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]
       ]
       await query.edit_message_text("قائمة الأدمن:" + SIGNATURE, reply_markup=InlineKeyboardMarkup(admin_keyboard))
@@ -631,10 +673,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       admins = set(DATA_STAT.get("admins", []))
       sellers_map = DATA_STAT.get("sellers", {})
       is_seller = uid in sellers_map or (uid.isdigit() and int(uid) in sellers_map)
-      if uid not in admins and not is_seller:
-          msg = build_customer_activity_message(DATA_STAT, uid)
+      if not uid in admins and not is_seller:
+          msg = build_customer_activity_message(DATA_STAT, uid, query.from_user.username)
           await query.edit_message_text(msg + SIGNATURE,
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]]))
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]])
+          )
           return
 
       if is_seller:
@@ -953,7 +996,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       used_keys = set(DATA.get("used_keys", []))
       if not keys_data:
           await query.edit_message_text("لا توجد أي مفاتيح متوفرة حالياً." + SIGNATURE,
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]])
+              )
           return
       msg = "🔑 Available keys:\n\n"
       total_available = 0
@@ -975,7 +1019,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       sellers = DATA.get("sellers", {})
       if not sellers:
           await query.edit_message_text("No sellers configured." + SIGNATURE,
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]])
+          )
           return
       msg = "📋 Sellers list:\n\n"
       sales_log = DATA.get("sales_log", [])
@@ -1027,7 +1072,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       sales = DATA.get("sales_log", [])[-20:]
       if not sales:
           await query.edit_message_text("No sales yet." + SIGNATURE,
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]])
+          )
           return
       msg = "📝 Last purchases:\n\n"
       for s in sales:
@@ -1037,14 +1083,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
           price = s.get("price")
           msg += f"- {buyer} | {product} | {duration} days | ${price}\n"
       await query.edit_message_text(msg + SIGNATURE,
-          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]])
+      )
       return
 
   if data == "admin_keys_revenue":
       sales = DATA.get("sales_log", [])
       if not sales:
           await query.edit_message_text("No sales yet." + SIGNATURE,
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]])
+          )
           return
       total_revenue = 0
       by_product = {}
@@ -1063,7 +1111,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
           msg += f"- {product}: {info['count']} keys — ${info['revenue']}\n"
       msg += f"\nTotal revenue: ${total_revenue}"
       await query.edit_message_text(msg + SIGNATURE,
-          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]])
+      )
       return
 
   if data == "admin_edit_prices":
@@ -1088,7 +1137,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       sellers = DATA.get("sellers", {})
       if not sellers:
           await query.edit_message_text("No sellers configured." + SIGNATURE,
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_edit_prices")]]))
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_edit_prices")]])
+          )
           return
       keyboard = [[InlineKeyboardButton("GLOBAL", callback_data=f"edit_price_choose_seller:{prod}:{days}:global")]]
       for sid, info in sellers.items():
@@ -1131,7 +1181,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       context.user_data["admin_action"] = "create_key"
       context.user_data["create_key_product"] = prod
       context.user_data["create_key_duration"] = days
-      await query.edit_message_text(f"Send the key string to create for product {prod} ({days} days)." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]]))
+      await query.edit_message_text(f"Send the key string to create for product {prod} ({days} days)." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_menu")]])
+      )
       return
 
   if data == "admin_sellers":
@@ -1245,7 +1296,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       _, prod = data.split(":", 1)
       file_ref = DATA.get("files", {}).get(prod)
       if not file_ref:
-          await query.edit_message_text("File not found." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_manage_files")]]))
+          await query.edit_message_text("File not found." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_manage_files")]])
+          )
           return
       try:
           if os.path.exists(file_ref):
@@ -1258,16 +1310,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   await context.bot.send_document(chat_id=query.from_user.id, document=InputFile(candidate))
               else:
                   await context.bot.send_document(chat_id=query.from_user.id, document=file_ref)
-          await query.edit_message_text(f"File {prod} sent to you." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_manage_files")]]))
+          await query.edit_message_text(f"File {prod} sent to you." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_manage_files")]])
+          )
       except Exception as e:
-          await query.edit_message_text("Failed to send file: " + str(e) + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_manage_files")]]))
+          await query.edit_message_text("Failed to send file: " + str(e) + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_manage_files")]])
+          )
       return
 
   if data and data.startswith("admin_delete_file:"):
       _, prod = data.split(":", 1)
       files = DATA.get("files", {})
       if prod not in files:
-          await query.edit_message_text("File not found." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_manage_files")]]))
+          await query.edit_message_text("File not found." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_manage_files")]])
+          )
           return
       file_ref = files.get(prod)
       try:
@@ -1279,17 +1334,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       if "files_meta" in DATA:
           DATA.get("files_meta", {}).pop(prod, None)
       save_data(DATA)
-      await query.edit_message_text(f"Deleted file for product {prod}." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_manage_files")]]))
+      await query.edit_message_text(f"Deleted file for product {prod}." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_manage_files")]])
+      )
       return
 
   if data and data.startswith("seller_get_file:"):
       _, prod = data.split(":", 1)
       if uid not in DATA.get("sellers", {}):
-          await query.edit_message_text("Only sellers can download product files." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]]))
+          await query.edit_message_text("Only sellers can download product files." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]])
+          )
           return
       file_ref = DATA.get("files", {}).get(prod)
       if not file_ref:
-          await query.edit_message_text("No file uploaded for this product." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]]))
+          await query.edit_message_text("No file uploaded for this product." + SIGNATURE, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]])
+          )
           return
       try:
           if os.path.exists(file_ref):
@@ -1522,7 +1580,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
               reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Main Menu", callback_data="admin_menu")]]))
       else:
           await update.message.reply_text("❌ Wrong code!" + SIGNATURE,
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]]))
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="back_to_start")]])
+          )
       return
 
   if text == button_texts["get_files"][lang]:
@@ -1558,7 +1617,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   if uid in DATAF.get("sellers", {}):
                       allowed = True
                   else:
-                      for s in DATAF.get("sales_log", []):
+                      for s in DATAF.get("sales_log", []) :
                           if s.get("user") == uid and s.get("product") == sel:
                               allowed = True
                               break
@@ -1939,7 +1998,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
       data.setdefault("keys", {}).setdefault(key_name, []).extend(keys)
       save_data(data)
       await update.message.reply_text(f"✅ تم إضافة {len(keys)} مفتاح لـ {product} ({duration}يوم)." + SIGNATURE,
-          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data=f"admin_add_keys_product:{product}")]]))
+          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data=f"admin_add_keys_product:{product}")]])
+      )
       context.user_data.clear()
       return
   if action == "add_seller_balance":
@@ -1949,15 +2009,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
           data = load_data()
           if sid not in data.get("sellers", {}):
               await update.message.reply_text("❌ Seller not found!" + SIGNATURE,
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_sellers")]]))
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_sellers")]])
+              )
           else:
               data["sellers"][sid]["balance"] = data["sellers"][sid].get("balance", 0) + amount
               save_data(data)
               await update.message.reply_text(f"✅ Added ${amount} to seller {sid}. New balance: ${data['sellers'][sid]['balance']}" + SIGNATURE,
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_sellers")]]))
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_sellers")]])
+              )
       except Exception:
           await update.message.reply_text("❌ Wrong format: amount" + SIGNATURE,
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_sellers")]]))
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_sellers")]])
+          )
       context.user_data.pop("admin_action", None)
       context.user_data.pop("target_seller", None)
       return
@@ -1996,7 +2059,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
           )
       except Exception:
           await update.message.reply_text("❌ أدخل رقم صحيح للسعر." + SIGNATURE,
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data=f"edit_price:{product}")]]))
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data=f"edit_price:{product}")]])
+          )
       context.user_data.pop("admin_action", None)
       context.user_data.pop("edit_price_product", None)
       context.user_data.pop("edit_price_days", None)
@@ -2134,28 +2198,6 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        from flask import Flask
-        from threading import Thread
-        import os
-
-        # Keep-alive server for deployment platforms
-        app = Flask('')
-
-        @app.route('/')
-        def home():
-            return "Bot is alive!"
-
-        def run():
-            port = int(os.environ.get("PORT", 8080))
-            app.run(host='0.0.0.0', port=port)
-
-        keep_alive_thread = Thread(target=run)
-        keep_alive_thread.daemon = True
-        keep_alive_thread.start()
-    except ImportError:
-        print("Flask not installed, skipping keep-alive server.")
-    
-    main()
+  main()
 
 

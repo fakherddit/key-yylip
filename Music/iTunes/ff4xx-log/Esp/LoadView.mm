@@ -1,5 +1,20 @@
 #import <UIKit/UIKit.h>
 #include "Includes.h"
+#include "../oxorany/oxorany_include.h"
+#include "../Helper/Vector3.h"
+#include "../Helper/Obfuscate.h"
+#include "../IMGUI/imgui.h"
+#include "../Helper/Mem.h"
+#include "../Helper/Quaternion.h"
+#include "../Helper/MonoString.h"
+
+#ifndef Deg2Rad
+#define Deg2Rad (3.14159265358979323846f / 180.0f)
+#endif
+
+extern ImFont* pixel_big;
+
+#include "../Helper/SDK.h"
 #import "menuIcon.h"
 #define timer(sec) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, sec * NSEC_PER_SEC), dispatch_get_main_queue(), ^
 #import "LoadView.h"
@@ -23,6 +38,11 @@ bool StreamerMode = true;
 @end
 
 @implementation MenuInteraction
+
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    if (FixLoginTimer > 0) return nil; // Pass ALL touches through when Fix Login is active
+    return [super hitTest:point withEvent:event];
+}
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [[extraInfo GetImGuiView] updateIOWithTouchEvent:event];
@@ -50,10 +70,19 @@ bool StreamerMode = true;
 
 static void didFinishLaunching(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef info)
 {   
-
-    timer(2) {
+    // SAFEMODE: REMOVED TELEGRAM URL OPEN (Crash Risk)
+    
+    // Increased timer to 10 seconds to ensure Unity is fully loaded
+    timer(10) {
+        NSLog(@"[SAFE-LOAD] ⏳ Attempting to load menu...");
+        
+        // Initialize GameSDK NOW (Safe Zone)
+        if (game_sdk) {
+           game_sdk->init();
+        }
+        
         extraInfo = [MenuLoad new];
-     [extraInfo checkAndExecutePaidBlock];
+        [extraInfo checkAndExecutePaidBlock];
     });
     
 }
@@ -107,11 +136,11 @@ __attribute__((constructor)) static void initialize()
     // Add to keyWindow to ensure it's on top but below ImGui
     [[UIApplication sharedApplication].keyWindow addSubview:menuTouchView];
 
-    [ImGuiDrawView showChange:true]; // Default to showing so we can see if it works
+    [ImGuiDrawView showChange:false]; // Start HIDDEN - gesture will show it
     [[UIApplication sharedApplication].keyWindow addSubview:_vna.view];
 
     UITapGestureRecognizer *tapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
-    tapGesture.numberOfTapsRequired = 2; // Double tap
+    tapGesture.numberOfTapsRequired = 2; // Double tap (TAP TWICE with 3 fingers)
     tapGesture.numberOfTouchesRequired = 3; // Three fingers
     tapGesture.cancelsTouchesInView = NO; // CRITICAL: Don't eat the touches
     tapGesture.delegate = self; // Set delegate for simultaneous recognition
@@ -121,6 +150,7 @@ __attribute__((constructor)) static void initialize()
 
 - (void)handleTap:(UITapGestureRecognizer *)sender {
     if (sender.state == UIGestureRecognizerStateEnded) {
+        NSLog(@"[ST-GESTURE] ✅ 3-Finger Double-Tap detected! Toggling menu...");
         [ImGuiDrawView showChange:![ImGuiDrawView isMenuShowing]];
     }
 }

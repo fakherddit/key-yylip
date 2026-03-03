@@ -15,8 +15,10 @@
 #define kHeight [UIScreen mainScreen].bounds.size.height
 #define kScale [UIScreen mainScreen].scale
 
+extern int FixLoginTimer; // Global timer for login fix
 extern MenuInteraction* menuTouchView;
 extern UIButton* InvisibleMenuButton;
+
 extern UIButton* VisibleMenuButton;
 extern UITextField* hideRecordTextfield;
 extern UIView* hideRecordView;

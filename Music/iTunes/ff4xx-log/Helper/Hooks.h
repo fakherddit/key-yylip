@@ -1,9 +1,27 @@
+#include "../IMGUI/imgui.h"
+#include "../IMGUI/imgui_internal.h"
 #import "vinhtran.hpp"
+
+// Fix missing externs
+extern ImFont* verdana_smol;
+extern ImFont* pixel_big;
+
+#include <algorithm> // For std::clamp
+// Fix dummy
+// Removed custom clamp to avoid ambiguity
+#include "Mem.h"
+#include "Vector3.h"
+#include "Quaternion.h"
+#include "Monostring.h"
+#include "Obfuscate.h"
+#include "../oxorany/oxorany_include.h"
 #import "loading.hxx"
 #include <fstream>
 #define FMT_HEADER_ONLY
 #include "fmt/core.h"
 #include <chrono>
+#include "CrashFix.h"  // Crash fix for KYO version
+#include "ProximityBypass.h"  // Proximity crash fix (< 15m)
 extern ImVec4 espv; // visÃ­vel
 extern ImVec4 espi; // invisÃ­vel/dead
 extern ImVec4 nameColor;
@@ -15,6 +33,27 @@ static void Transform_INTERNAL_SetPosition(void *player, Vvector3 inn) {
     void (*_Transform_INTERNAL_SetPosition)(void *transform, Vvector3 in) = (void (*)(void *, Vvector3))getRealOffset(ENCRYPTOFFSET("0x105FE7DB8"));
     _Transform_INTERNAL_SetPosition(player, inn);
 }
+
+// AimKill System
+namespace Save {
+    void* DamageInfo = nullptr;
+    clock_t AimDelay = 0;
+    int AimFPS = (1000000 / 15);
+}
+
+bool AimKill = false;
+bool SowDamage = true;
+bool autochangeweapon = false;
+bool POFFNNMOOBM = false;
+int GDKLMFLNNGM = 0;
+
+struct COW_GamePlay_IHAAMHPPLMG_o {
+    uint32_t NBPDJAAAFBH;
+    uint32_t JEDDPHIHGKL;
+    uint8_t IOICFFEKAIL;
+    uint8_t PHAFNFOFFDB;
+    uint64_t BNFAIDHEHOM;
+};
 
 struct Vars_t
 {
@@ -28,7 +67,7 @@ struct Vars_t
     int AimWhen = {};
     
     // New Features
-    bool AutoAim = false;
+    bool AutoAim = true; // Enabled by default
     bool AimFire = false;
     bool AimScope = false;
     bool FireScope = false;
@@ -36,6 +75,7 @@ struct Vars_t
     bool AimKillFire = false;
     bool FastScope = false; 
 
+    bool AutoFire = true; // Added AutoFire
     bool isAimFov = {};
     int AimHitbox = 0; // 0: Head, 1: Neck, 2: Body
     const char* aimHitboxes[3] = {" CabeÃ§a", " PescoÃ§o", " Corpo"};
@@ -53,8 +93,8 @@ struct Vars_t
     bool counts = {};
     ImVec4 boxColor = ImVec4(1.0f, 0.0f, 0.0f, 0.8f);
     float AimSpeed = 9999.0f; 
-    bool VisibleCheck = false; 
-    bool IgnoreKnocked = false; 
+    bool VisibleCheck = true; // FORCE ON: GameSDK Visibility Check
+    bool IgnoreKnocked = true; // FORCE ON: Ignore Dead/Knocked
 } Vars;
 
 
@@ -91,10 +131,12 @@ public:
     void *(*_getRightForeArmTF)(void *);
 };
 
-game_sdk_t *game_sdk = new game_sdk_t();
+extern game_sdk_t *game_sdk;
 
 void game_sdk_t::init()
 {
+    if (!game_sdk) return;
+
  this->GetHp = (int (*)(void*))getRealOffset(oxo("0x1051AAF78")); // public int get_CurHP() { }
     this->Curent_Match = (void* (*)())getRealOffset(oxo("0x101283110"));   // public static NFJPHMKKEBF CurrentMatch() { }
     this->GetLocalPlayer = (void* (*)(void*))getRealOffset(oxo("0x103FF6CD4"));  // private static Player GetLocalPlayer() { }
@@ -204,6 +246,160 @@ Quaternion GetCurrentRotation(void* player) {
     return Quaternion::LookRotation(game_sdk->GetForward(transform), Vector3(0, 1, 0));
 }
 
+// AimKill Functions
+COW_GamePlay_IHAAMHPPLMG_o GetplayerID(void *_this) {
+    return ((COW_GamePlay_IHAAMHPPLMG_o (*)(void *))getRealOffset(0x10511E8A4))(_this);
+}
+
+static void *GetWeaponOnHand1(void *local) {
+    void *(*_GetWeaponOnHand1)(void *local) = (void *(*)(void *))getRealOffset(0x1051414FC);
+    return _GetWeaponOnHand1(local);
+}
+
+static int GetWeapon(void* enemy) {
+    int (*GetWeapon)(void *player) = (int(*)(void *))getRealOffset(0x104B2F198);
+    return GetWeapon(enemy);
+}
+
+static int GetDamage(void *pthis) {
+    return ((int (*)(void *))getRealOffset(0x10387F3AC))(pthis);
+}
+
+void *get_HeadCollider(void *pthis) {
+    return ((void* (*)(void *))getRealOffset(0x105144E64))(pthis);
+}
+
+void *get_gameObject(void *Pthis) {
+    return ((void* (*)(void *))getRealOffset(0x105F9CCC0))(Pthis);
+}
+
+void *GKHECDLGAJA(void *pthis, void* a1) {
+    return ((void* (*)(void *,void *))getRealOffset(0x1051A8600))(pthis,a1);
+}
+
+monoList<float *> *LCLHHHKFCFP(void *Weapon,void *CAGCICACKCF,void *HFBDJJDICLN,bool LDGHPOPPPNL,void* DamageInfo) {
+    return ((monoList<float *> * (*)(void*,void*,void*,bool,void*))getRealOffset(0x1038A86B0))(Weapon,CAGCICACKCF,HFBDJJDICLN,LDGHPOPPPNL,DamageInfo);
+}
+
+void StartWholeBodyFiring(void* player,void* WeaponOnHand) {
+    void(*StartWholeBodyFiring)(void*,void*) = (void(*)(void*,void*))getRealOffset(ENCRYPTOFFSET("0x105304B44"));
+    return StartWholeBodyFiring(player,WeaponOnHand);
+}
+
+static void StartFiring(void *Player, void *WeaponOnHand) {
+    void (*_StartFiring)(void *, void *) = (void (*)(void *, void *))getRealOffset(0x1053045C0);
+    return _StartFiring(Player, WeaponOnHand);
+}
+
+static void StopFire1(void* Player,void* WeaponOnHand) {
+    void(*_StopFire1)(void*,void*) = (void(*)(void*,void*))getRealOffset(0x1052DAF9C);
+    _StopFire1(Player, WeaponOnHand);
+}
+
+static int32_t TakeDamage(void *_this, int32_t KOCMLPLOILD, COW_GamePlay_IHAAMHPPLMG_o HLJDHPGGODB, void* JIIJIFKKCCB, int32_t BOEIBGAABDL, Vector3 NJMFBKNHMBP, Vector3 DOBOBMFMKBJ, monoList<float *> *NBKBEBFNDBE, void* damagerWeaponDynamicInfo, uint32_t damagerVehicleID) {
+    return ((int32_t (*)(void*, int32_t, COW_GamePlay_IHAAMHPPLMG_o, void*, int32_t, Vector3, Vector3, monoList<float *> *, void*, uint32_t))getRealOffset(0x1052D91EC))(_this, KOCMLPLOILD, HLJDHPGGODB, JIIJIFKKCCB, BOEIBGAABDL, NJMFBKNHMBP, DOBOBMFMKBJ, NBKBEBFNDBE, damagerWeaponDynamicInfo, damagerVehicleID); 
+}
+
+static void SwapWeapon(void *player, int POFFNNMOOBM, bool GDKLMFLNNGM) {
+    void (*_SwapWeapon)(void *player, int POFFNNMOOBM, bool GDKLMFLNNGM) = (void (*)(void *, int, bool))getRealOffset(ENCRYPTOFFSET("0x1053051BC"));
+    _SwapWeapon(player, POFFNNMOOBM, GDKLMFLNNGM);
+}
+
+void PlayerTakeDamage(void* ClosestEnemy) {
+    // EMERGENCY CRASH FIX: Complete disable of damage system
+    NSLog(@"[CRASH-FIX] PlayerTakeDamage COMPLETELY DISABLED - ESP Only Mode");
+    return;
+    
+    // ALL DAMAGE CODE DISABLED BELOW
+    /*
+    if (CrashFix::DISABLE_AIMKILL) {
+        NSLog(@"[CRASH-FIX] PlayerTakeDamage blocked (would crash on KYO)");
+        return;
+    }
+    
+    if (ClosestEnemy != nullptr && game_sdk->get_isVisible(ClosestEnemy) && clock() > Save::AimDelay) {
+        Save::AimDelay = clock() + Save::AimFPS;
+
+        void* match = game_sdk->Curent_Match();
+        if (!match) return;
+
+        void* LocalPlayer = game_sdk->GetLocalPlayer(match);
+        if (LocalPlayer != NULL) {
+
+            void* WeaponHand = GetWeaponOnHand1(LocalPlayer);
+            if (WeaponHand == nullptr) return;
+
+            void* HitInfo = *(void**)((uintptr_t)LocalPlayer + 0x9F0);
+            if (HitInfo == nullptr) return;
+
+            auto PlayerID2 = GetplayerID(LocalPlayer);
+
+            auto baseDamage = GetDamage(WeaponHand);
+            int WeaponID = GetWeapon(WeaponHand);
+
+            Vector3 localLocation = GetHeadPosition(LocalPlayer);
+            Vector3 enemyLocation = GetHeadPosition(ClosestEnemy);
+
+            void* damagerWeaponDynamicInfo = reinterpret_cast<void*>(getRealOffset(0x104F16C30));
+
+            void *damagerDynamicInfo;
+            if (!SowDamage) {
+                damagerDynamicInfo = damagerWeaponDynamicInfo;
+            } else {
+                damagerDynamicInfo = nullptr;
+            }
+
+            if (WeaponID == -1 || baseDamage == 0) return;
+
+            void* PlayerAttributes = *(void**)((uint64_t)LocalPlayer + 0x680);
+            if (!PlayerAttributes) return;
+
+            void* DamageModule = *(void**)((uint64_t)PlayerAttributes + 0x2A0);
+            if (!DamageModule) return;
+
+            void* DamageInfo = *(void**)((uint64_t)DamageModule + 0x10);
+            if (!DamageInfo) return;
+
+            *(int*)((char*)DamageInfo + 0x14) = 1;
+            *(void**)((char*)DamageInfo + 0x40) = WeaponHand;
+            *(int*)((char*)DamageInfo + 0x10) = baseDamage;
+            *(COW_GamePlay_IHAAMHPPLMG_o*)((char*)DamageInfo + 0x28) = PlayerID2;
+
+            void* headCollider = get_HeadCollider(ClosestEnemy);
+            if (headCollider == nullptr) return;
+
+            void* hitGameObject = get_gameObject(headCollider);
+            if (hitGameObject == nullptr) return;
+
+            *(void**)((char*)HitInfo + 0x18) = hitGameObject;
+            *(void**)((char*)HitInfo + 0x20) = headCollider;
+            *(Vector3*)((char*)HitInfo + 0x30) = enemyLocation;
+            *(int*)((char*)HitInfo + 0x64) = 1;
+
+            auto targetPosition = GKHECDLGAJA(LocalPlayer, HitInfo);
+            if (targetPosition == nullptr) return;
+
+            monoList<float*>* CheckParametros = LCLHHHKFCFP(WeaponHand, targetPosition, headCollider, false, DamageInfo);
+            if (CheckParametros == nullptr) return;
+
+            StartWholeBodyFiring(LocalPlayer, WeaponHand);
+            TakeDamage(ClosestEnemy, baseDamage, PlayerID2, DamageInfo,
+                       WeaponID, localLocation, enemyLocation, CheckParametros, damagerDynamicInfo, 0);
+            StartFiring(LocalPlayer, WeaponHand);
+            StopFire1(LocalPlayer, WeaponHand);
+
+            GDKLMFLNNGM++;
+
+            if (GDKLMFLNNGM > 1 && autochangeweapon) { 
+                POFFNNMOOBM = !POFFNNMOOBM; 
+                SwapWeapon(LocalPlayer, POFFNNMOOBM, false); 
+                GDKLMFLNNGM = 0; 
+            }
+        }
+    }
+    */ // END DISABLED DAMAGE CODE
+}
+
 #include "Helper/Ext.h"
 
 class tanghinh {
@@ -227,10 +423,10 @@ public:
 
     static bool isVisible(void *enemy) {
         if (enemy != NULL) {
-            void *hitObj = NULL;
-            auto Camera = Transform_GetPosition(game_sdk->Component_GetTransform(game_sdk->get_camera()));
-            auto Target = Transform_GetPosition(game_sdk->Component_GetTransform(Player_GetHeadCollider(enemy)));
-            return !Physics_Raycast(Camera, Target, 12, &hitObj);
+            // CRASH FIX: Use GameSDK Check instead of Raycast
+            // Raycast (0x1046F7568) is unstable/outdated. 
+            // Using get_isVisible (0x10514A22C) instead.
+            return game_sdk->get_isVisible(enemy);
         }
         return false;
     }
@@ -343,18 +539,26 @@ void *GetClosestEnemy() {
 
         for (int u = 0; u < players->getNumValues(); u++) {
             void *Player = players->getValues()[u];
+            // STRICT VALIDATION: HP > 0, Not Dead, Not Local Team
             if (!Player || Player == LocalPlayer || !game_sdk->get_MaxHP(Player) || game_sdk->get_isLocalTeam(Player))
                 continue;
 
-            if (Vars.IgnoreKnocked && game_sdk->get_IsDieing(Player))
+            // RULE: Ignore Dead Targets (Strict) - Conditional on Vars
+            if (Vars.IgnoreKnocked && (game_sdk->get_IsDieing(Player) || game_sdk->GetHp(Player) <= 0))
                 continue;
+
+            // RULE: Line of Sight (Visibility Rule) - Conditional on Vars
+            // The system only tracks and aims at targets that are directly visible
             if (Vars.VisibleCheck && !tanghinh::isVisible(Player))
                 continue;
 
             Vector3 PlayerPos = GetHitboxPosition(Player, Vars.AimHitbox);
             float distance = Vector3::Distance(LocalPlayerPos, PlayerPos);
-            if (distance >= 300)
-                continue;
+            
+            // PROXIMITY BYPASS - Validate safe distance before aiming
+            float safeDistance = SafeDistance(distance);
+            if (!CanEngageEnemy(safeDistance)) continue;  // Too close or too far
+            if (safeDistance >= 300) continue;  // Out of range
 
             ImVec2 enemyScreenPos = Camera$$WorldToScreen::Regular(PlayerPos);
             bool isValidTarget = isFov(Vector3(enemyScreenPos.x, enemyScreenPos.y, 0), Vector3(center.x, center.y, 0), Vars.AimFov);
@@ -400,7 +604,11 @@ void UpOneEnemy() {
         Vector3 enemyPos = game_sdk->get_position(enemyTF);
         Vector3 localPos = game_sdk->get_position(localTF);
         float distance = Vector3::Distance(localPos, enemyPos);
-        if (distance <= 10.0f) continue;
+        
+        // PROXIMITY BYPASS - Crash fix when too close to enemy
+        float safeDistance = SafeDistance(distance);
+        if (safeDistance < 15.0f) continue;  // Skip if too close (CRASH FIX)
+        if (!CanEngageEnemy(distance)) continue;  // Validate safe to engage
 
         float groundY = enemyPos.y;
         float targetY = groundY + 5.7f;
@@ -417,6 +625,7 @@ void UpOneEnemy() {
 }
 
 void ProcessAimbot() {
+    return; // DIAGNOSTIC: DISABLED
     if (!Vars.Aimbot)
         return;
     void *CurrentMatch = game_sdk->Curent_Match();
@@ -451,8 +660,12 @@ void ProcessAimbot() {
     // Legacy support if user still uses AimWhen somehow (hidden)
     if (Vars.AimWhen == 0 && Vars.AutoAim == false && Vars.AimFire == false && Vars.AimScope == false) shouldAim = true; 
 
-    if (shouldAim && (!Vars.VisibleCheck || tanghinh::isVisible(closestEnemy))) {
-        if (game_sdk->get_IsDieing(closestEnemy) && Vars.IgnoreKnocked) {
+    // STRICT RULES: Line of Sight + Ignore Dead (User Request)
+    // We force check Visibility and Life state to ensure no wall-targeting or dead-locking.
+    bool targetInvalid = !tanghinh::isVisible(closestEnemy) || game_sdk->get_IsDieing(closestEnemy) || game_sdk->GetHp(closestEnemy) <= 0;
+
+    if (shouldAim) {
+        if (targetInvalid) {
             float shortestDistance = 9999.0f;
             void *newTarget = NULL;
             Dictionary<uint8_t *, void **> *players = *(Dictionary<uint8_t *, void **> **)((long)CurrentMatch + oxo("0x120"));
@@ -462,15 +675,19 @@ void ProcessAimbot() {
                     if (!Player || Player == LocalPlayer || !game_sdk->get_MaxHP(Player) || game_sdk->get_isLocalTeam(Player) || Player == closestEnemy)
                         continue;
 
-                    if (Vars.IgnoreKnocked && game_sdk->get_IsDieing(Player))
-                        continue;
-                    if (Vars.VisibleCheck && !tanghinh::isVisible(Player))
-                        continue;
+                    // STRICT FILTER: Always Alive, Always Visible
+                    if (game_sdk->get_IsDieing(Player) || game_sdk->GetHp(Player) <= 0) continue;
+                    if (!tanghinh::isVisible(Player)) continue;
 
                     Vector3 PlayerPos = GetHitboxPosition(Player, Vars.AimHitbox);
                     float distance = Vector3::Distance(PlayerLocation, PlayerPos);
-                    if (distance < 300 && distance < shortestDistance) {
-                        shortestDistance = distance;
+                    
+                    // PROXIMITY BYPASS - Validate safe distance before selecting target
+                    if (!ValidateKillAttempt(distance, Player)) continue;  // Too close = crash
+                    float safeDistance = SafeDistance(distance);
+                    
+                    if (safeDistance < 300 && safeDistance < shortestDistance) {
+                        shortestDistance = safeDistance;
                         newTarget = Player;
                     }
                 }
@@ -480,7 +697,7 @@ void ProcessAimbot() {
                 EnemyLocation = GetHitboxPosition(newTarget, Vars.AimHitbox);
                 closestEnemy = newTarget;
             } else {
-                return;
+                return; // No valid target compliant with rules
             }
         }
 
@@ -490,11 +707,29 @@ void ProcessAimbot() {
         }
 
         Quaternion TargetLook = GetRotationToTheLocation(EnemyLocation, smooth, PlayerLocation);
-        game_sdk->set_aim(LocalPlayer, TargetLook);
+        
+        // Only Rotate Camera if AimKill is NOT active (User Request: AimKill shouldn't use AutoAim)
+        if (!AimKill) { 
+             game_sdk->set_aim(LocalPlayer, TargetLook);
+        }
+
+        // AUTO FIRE (Triggerbot) - Disable if AimKill is active (Logic: AimKill does the damage)
+        if (!AimKill && Vars.AutoFire && IsScopeOn && !IsFiring) {
+            void* weapon = GetWeaponOnHand1(LocalPlayer);
+            if (weapon) {
+                StartFiring(LocalPlayer, weapon);
+            }
+        }
+
+        // AimKill integration - DISABLED in CrashFix mode (causes crash on KYO)
+        if(AimKill && Vars.AimbotEnable && !CrashFix::DISABLE_AIMKILL){
+            PlayerTakeDamage(closestEnemy);
+        }
     }
 }
 
 void get_players() {
+    return; // DIAGNOSTIC: DISABLED
     ImDrawList *draw_list = ImGui::GetBackgroundDrawList();
     int numberOfPlayersAround = 0;
     if (!draw_list)
@@ -541,7 +776,7 @@ void get_players() {
             Vector3 pos = getPosition(closestEnemy);
             Vector3 pos2 = getPosition(local_player);
             float distance = Vector3::Distance(pos, pos2);
-            if (distance > 200.0f)
+            if (distance > 500.0f) // FIXED: Increased render distance from 200 to 500 for ESP
                 continue;
 
             bool isEnemyDead = game_sdk->get_IsDieing(closestEnemy);
@@ -627,14 +862,14 @@ void get_players() {
                     int pixels = maxpixels;
                     if (w2sc) {
                         if (pos_3.x < 0)
-                            pixels = clamp((int)-pos_3.x, 0, (int)maxpixels);
+                            pixels = std::clamp((int)-pos_3.x, 0, (int)maxpixels);
                         if (pos_3.y < 0)
-                            pixels = clamp((int)-pos_3.y, 0, (int)maxpixels);
+                            pixels = std::clamp((int)-pos_3.y, 0, (int)maxpixels);
 
                         if (pos_3.x > disp.width)
-                            pixels = clamp((int)pos_3.x - (int)disp.width, 0, (int)maxpixels);
+                            pixels = std::clamp((int)pos_3.x - (int)disp.width, 0, (int)maxpixels);
                         if (pos_3.y > disp.height)
-                            pixels = clamp((int)pos_3.y - (int)disp.height, 0, (int)maxpixels);
+                            pixels = std::clamp((int)pos_3.y - (int)disp.height, 0, (int)maxpixels);
                     }
 
                     float opacity = (float)pixels / (float)maxpixels;
@@ -688,6 +923,7 @@ if (Vars.counts) {
 }
 
 void RunTelekill() {
+    return; // DIAGNOSTIC: DISABLED
     if (!istelekill)
         return;
 
@@ -730,6 +966,7 @@ void RunTelekill() {
 
 
 void aimbot() {
+    return; // DIAGNOSTIC: DISABLED
     ImVec2 center = ImVec2(ImGui::GetIO().DisplaySize.x / 2, ImGui::GetIO().DisplaySize.y / 2);
     if (!Vars.Aimbot)
         return;
